@@ -1,0 +1,15 @@
+# 의존성 / 빌드 산출물
+node_modules/
+dist/
+
+# 로그
+*.log
+
+# 로컬 전용 설정
+.claude/
+
+# 삼성 독점 폰트 — 공개 저장소/릴리스 제외 (로컬 개발에서만 사용)
+SamsungOneKorean600.woff2
+
+# 생성물(재생성 가능)
+build/icon.png

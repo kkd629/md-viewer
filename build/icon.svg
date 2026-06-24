@@ -1,0 +1,33 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B2FE6"/>
+      <stop offset="0.5" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#06D6C4"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="512" y1="96" x2="512" y2="600" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="markGloss" x1="512" y1="330" x2="512" y2="720" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#E8F1FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- squircle 배경 + 비비드 그라데이션 -->
+  <rect x="92" y="92" width="840" height="840" rx="210" fill="url(#bg)"/>
+  <!-- 상단 광택 -->
+  <rect x="92" y="92" width="840" height="840" rx="210" fill="url(#gloss)"/>
+  <!-- 얇은 외곽 하이라이트 링 -->
+  <rect x="92" y="92" width="840" height="840" rx="210" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="6"/>
+
+  <!-- 마크다운 마크: M + 아래 화살표 (흰색) -->
+  <g fill="none" stroke="url(#markGloss)" stroke-width="68" stroke-linejoin="round" stroke-linecap="round">
+    <!-- M -->
+    <path d="M 296 700 V 346 L 440 512 L 584 346 V 700"/>
+    <!-- 아래 화살표 -->
+    <path d="M 712 346 V 700"/>
+    <path d="M 632 560 L 712 702 L 792 560"/>
+  </g>
+</svg>
