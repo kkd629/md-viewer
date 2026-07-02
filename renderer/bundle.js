@@ -54049,11 +54049,24 @@ ${text}</tr>
   var LS = "mdv.session.v1";
   function persist() {
     try {
+      const cur = active();
+      if (cur) cur.content = editor.value;
       localStorage.setItem(LS, JSON.stringify({
         settings: state.settings,
         vaults: state.vaults.map((v) => v.root),
-        openFiles: state.tabs.filter((t) => t.filePath).map((t) => t.filePath),
-        activeFile: active()?.filePath || null,
+        // 저장 안 한(untitled)·수정 중인 탭 내용까지 보존. 저장된 파일이고 변경 없으면 내용은 디스크에서 다시 읽음(용량 절약)
+        tabs: state.tabs.map((t) => {
+          const clean = t.filePath && !t.dirty;
+          return {
+            filePath: t.filePath,
+            name: t.name,
+            dirty: !!t.dirty,
+            isHome: !!t.isHome,
+            content: t.isHome || clean ? null : t.content,
+            savedContent: t.isHome || clean ? null : t.savedContent
+          };
+        }),
+        activeIndex: state.tabs.findIndex((t) => t.id === state.activeId),
         mode: state.mode,
         sidebarWidth: sidebar.style.width || null,
         sidebarCollapsed: sidebar.classList.contains("collapsed")
@@ -54102,6 +54115,7 @@ ${text}</tr>
     }
     preview.innerHTML = resolveRelativeImages(html2);
     preview.querySelectorAll('li input[type="checkbox"]').forEach((cb) => {
+      cb.disabled = false;
       const li = cb.closest("li");
       if (!li) return;
       li.classList.add("task-list-item");
@@ -54109,6 +54123,35 @@ ${text}</tr>
     });
     buildLineMap();
   }
+  function toggleTaskInSource(cbIndex) {
+    const t = active();
+    if (!t) return;
+    const lines = editor.value.split("\n");
+    let n = -1, done = false;
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^(\s*(?:[-*+]|\d+\.)\s+\[)([ xX])(\].*)$/);
+      if (!m) continue;
+      n++;
+      if (n === cbIndex) {
+        const checked = m[2].toLowerCase() === "x";
+        lines[i] = m[1] + (checked ? " " : "x") + m[3];
+        done = true;
+        break;
+      }
+    }
+    if (!done) return;
+    const caret2 = Math.min(editor.selectionStart, editor.value.length);
+    editor.value = lines.join("\n");
+    editor.selectionStart = editor.selectionEnd = caret2;
+    onEditorChanged();
+  }
+  preview.addEventListener("change", (e) => {
+    const cb = e.target;
+    if (!(cb instanceof HTMLInputElement) || cb.type !== "checkbox") return;
+    const boxes = [...preview.querySelectorAll('input[type="checkbox"]')];
+    const idx = boxes.indexOf(cb);
+    if (idx >= 0) toggleTaskInSource(idx);
+  });
   function buildLineMap() {
     const map = [];
     preview.querySelectorAll("[data-line]").forEach((el) => map.push({ line: +el.dataset.line, top: el.offsetTop }));
@@ -54426,6 +54469,33 @@ ${text}</tr>
     const v = editor.value;
     if (e.key === "Tab") {
       e.preventDefault();
+      if (s !== en) {
+        const blockStart = v.lastIndexOf("\n", s - 1) + 1;
+        const region = v.slice(blockStart, en);
+        const trailingNL = region.endsWith("\n");
+        const body = trailingNL ? region.slice(0, -1) : region;
+        const lines = body.split("\n");
+        let firstDelta = 0, totalDelta = 0;
+        const out = lines.map((ln, i) => {
+          if (e.shiftKey) {
+            const m = ln.match(/^( {1,4}|\t)/);
+            const rm = m ? m[1].length : 0;
+            if (i === 0) firstDelta = -rm;
+            totalDelta -= rm;
+            return ln.slice(rm);
+          } else {
+            if (i === 0) firstDelta = 4;
+            totalDelta += 4;
+            return "    " + ln;
+          }
+        });
+        const newRegion = out.join("\n") + (trailingNL ? "\n" : "");
+        editor.value = v.slice(0, blockStart) + newRegion + v.slice(en);
+        editor.selectionStart = Math.max(blockStart, s + firstDelta);
+        editor.selectionEnd = Math.max(blockStart, en + totalDelta);
+        onEditorChanged();
+        return;
+      }
       const lineStart = v.lastIndexOf("\n", s - 1) + 1;
       if (e.shiftKey) {
         const m = v.slice(lineStart).match(/^( {1,4}|\t)/);
@@ -54503,10 +54573,11 @@ ${text}</tr>
     persist();
   }
   $("#btn-split-dir").addEventListener("click", toggleSplitDir);
-  function newTab({ filePath = null, content = "", name } = {}) {
+  function newTab({ filePath = null, content = "", name, isHome = false } = {}) {
     const tab = {
       id: idSeq++,
       filePath,
+      isHome,
       name: name || (filePath ? filePath.replace(/^.*[\\/]/, "") : "untitled.md"),
       content,
       savedContent: content,
@@ -56506,10 +56577,12 @@ ${text}
       zoom(-1);
     }
   });
-  window.addEventListener("beforeunload", (e) => {
-    if (state.tabs.some((t) => t.dirty)) {
-      e.preventDefault();
-      e.returnValue = "";
+  window.addEventListener("beforeunload", () => {
+    try {
+      const a = active();
+      if (a) a.content = editor.value;
+      persist();
+    } catch {
     }
   });
   var WELCOME_FALLBACK = `# \u{1F4DD} MD Viewer
@@ -56540,7 +56613,37 @@ ${text}
     }
     renderVaults();
     let restored = false;
-    if (Array.isArray(s.openFiles) && s.openFiles.length) {
+    if (Array.isArray(s.tabs) && s.tabs.length) {
+      for (const ts of s.tabs) {
+        if (ts.isHome) {
+          let home = null;
+          try {
+            home = await window.api.readHome();
+          } catch {
+          }
+          const w = newTab({ content: home || WELCOME_FALLBACK, isHome: true });
+          w.name = ts.name || "\uD648";
+          restored = true;
+          continue;
+        }
+        let content = ts.content, saved = ts.savedContent;
+        if (ts.filePath && content == null) {
+          try {
+            content = await window.api.readFile(ts.filePath);
+            saved = content;
+          } catch {
+            continue;
+          }
+        }
+        if (content == null) content = "";
+        if (saved == null) saved = content;
+        const t = newTab({ filePath: ts.filePath, content, name: ts.name });
+        t.savedContent = saved;
+        t.dirty = content !== saved;
+        t.lastCommitted = content;
+        restored = true;
+      }
+    } else if (Array.isArray(s.openFiles) && s.openFiles.length) {
       for (const fp of s.openFiles) {
         try {
           const c = await window.api.readFile(fp);
@@ -56550,20 +56653,21 @@ ${text}
         }
       }
     }
-    if (!restored) {
+    if (!restored || state.tabs.length === 0) {
       let home = null;
       try {
         home = await window.api.readHome();
       } catch {
       }
-      const w = newTab({ content: home || WELCOME_FALLBACK });
+      const w = newTab({ content: home || WELCOME_FALLBACK, isHome: true });
       w.name = "\uD648";
     }
-    let act = state.tabs[0];
+    let actIdx = typeof s.activeIndex === "number" && s.activeIndex >= 0 && s.activeIndex < state.tabs.length ? s.activeIndex : 0;
     if (s.activeFile) {
-      const f = state.tabs.find((t) => t.filePath === s.activeFile);
-      if (f) act = f;
+      const fi = state.tabs.findIndex((t) => t.filePath === s.activeFile);
+      if (fi >= 0) actIdx = fi;
     }
+    const act = state.tabs[actIdx] || state.tabs[0];
     state.activeId = act.id;
     activateTab(act.id);
     if (act.filePath) revealInTree(act.filePath);

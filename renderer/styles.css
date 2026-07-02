@@ -335,16 +335,20 @@ body { display: flex; flex-direction: column; height: 100vh; }
   letter-spacing: 0; word-spacing: 0;
 }
 #editor-highlight, #editor2-highlight {
-  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  position: absolute; inset: 0; pointer-events: none;
+  overflow-x: hidden; overflow-y: scroll;   /* 세로 스크롤바 공간을 편집기와 동일하게 예약(clientWidth 일치) */
   color: var(--text); background: var(--editor-bg); z-index: 0;
 }
 #editor, #editor2 {
   position: absolute; inset: 0; width: 100%; height: 100%; resize: none; outline: none;
   background: transparent; color: transparent; caret-color: var(--accent);
-  overflow: auto; -webkit-user-select: text; user-select: text; z-index: 1;
+  overflow-x: auto; overflow-y: scroll; -webkit-user-select: text; user-select: text; z-index: 1;
 }
-/* 편집기 스크롤바는 레이아웃 높이/폭을 먹지 않게 숨김(오버레이 pre와 clientHeight 일치 → 스크롤 누적 어긋남 방지). 휠·키보드·캐럿 스크롤은 그대로 동작 */
-#editor::-webkit-scrollbar, #editor2::-webkit-scrollbar { width: 0; height: 0; background: transparent; }
+/* 세로 스크롤바는 보이게(전역 스타일), 가로 스크롤바만 높이 0으로 숨김 → 오버레이 pre와 clientHeight 일치(스크롤 누적 어긋남 방지). 가로 스크롤은 휠/키보드로 동작 */
+#editor::-webkit-scrollbar:horizontal, #editor2::-webkit-scrollbar:horizontal { height: 0; }
+/* 오버레이(pre)의 스크롤바는 공간만 예약하고 투명 처리(편집기와 폭 맞춤) */
+#editor-highlight::-webkit-scrollbar, #editor2-highlight::-webkit-scrollbar { width: 12px; height: 0; background: transparent; }
+#editor-highlight::-webkit-scrollbar-thumb, #editor2-highlight::-webkit-scrollbar-thumb { background: transparent; }
 /* 선택 영역: 반투명으로 깔아 뒤의 색상 글자가 비쳐 보이게 */
 #editor::selection, #editor2::selection { background: color-mix(in srgb, var(--accent) 40%, transparent); color: transparent; }
 #editor::-moz-selection, #editor2::-moz-selection { background: color-mix(in srgb, var(--accent) 40%, transparent); color: transparent; }
@@ -496,9 +500,10 @@ body.no-syntax #editor-highlight, body.no-syntax #editor2-highlight { display: n
 .markdown-body ul, .markdown-body ol { padding-left: 1.6em; margin: .6em 0; }
 .markdown-body li { margin: .25em 0; }
 .markdown-body li.task-list-item { list-style: none; margin-left: -1.3em; }
-.markdown-body li.task-list-item input { -webkit-appearance: none; appearance: none; margin-right: .5em; width: 15px; height: 15px; vertical-align: -3px; border: 1.5px solid var(--t-code); border-radius: 3px; background: transparent; cursor: default; position: relative; transition: background .1s, border-color .1s; }
+.markdown-body li.task-list-item input { -webkit-appearance: none; appearance: none; margin-right: .5em; width: 18px; height: 18px; vertical-align: -4px; border: 1.5px solid var(--t-code); border-radius: 3px; background: transparent; cursor: pointer; position: relative; transition: background .1s, border-color .1s; }
+.markdown-body li.task-list-item input:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .markdown-body li.task-list-item input:checked { background: var(--t-code); border-color: var(--t-code); }
-.markdown-body li.task-list-item input:checked::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.markdown-body li.task-list-item input:checked::after { content: ""; position: absolute; left: 5px; top: 2px; width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .markdown-body li.task-done { color: var(--t-code); }
 .markdown-body li.task-done { text-decoration: none; }
 .markdown-body li.task-done > * { opacity: .85; }
@@ -649,8 +654,9 @@ body.no-syntax #editor-highlight, body.no-syntax #editor2-highlight { display: n
 #ctxmenu button:hover { background: var(--accent-soft); }
 
 .hidden { display: none !important; }
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #4a4a4a; }
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-thumb { background: #5c6270; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #7a8290; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
-[data-theme="light"] ::-webkit-scrollbar-thumb, [data-theme="solarized"] ::-webkit-scrollbar-thumb { background: #ccc; }
+[data-theme="light"] ::-webkit-scrollbar-thumb, [data-theme="solarized"] ::-webkit-scrollbar-thumb { background: #b0b4bd; }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover, [data-theme="solarized"] ::-webkit-scrollbar-thumb:hover { background: #969ba6; }
