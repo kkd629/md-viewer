@@ -157,7 +157,7 @@ function toggleTaskInSource(cbIndex) {
   }
   if (!done) return;
   const caret = Math.min(editor.selectionStart, editor.value.length);
-  editor.value = lines.join('\n');
+  setValueKeepScroll(editor, lines.join('\n'));
   editor.selectionStart = editor.selectionEnd = caret;
   onEditorChanged(); // 내용/dirty/문법색/미리보기 재렌더 + 자동저장
 }
@@ -268,6 +268,26 @@ function applyHighlight() {
   hl.innerHTML = buildHL(editor.value, active());
 }
 function syncHighlightScroll() { hl.scrollTop = editor.scrollTop; hl.scrollLeft = editor.scrollLeft; }
+// textarea 는 value 를 재할당하면 스크롤이 0으로 리셋된다(Chromium) → 값 교체 시 스크롤 보존.
+// "개행/잘라내기·붙여넣기 후 뷰가 엉뚱한 곳으로 튀는" 문제의 근본 원인.
+function setValueKeepScroll(ed, value) {
+  const st = ed.scrollTop, sl = ed.scrollLeft;
+  ed.value = value;
+  ed.scrollTop = st; ed.scrollLeft = sl;
+}
+// 프로그램적 편집(붙여넣기·자동 들여쓰기·서식 삽입) 후 커서가 화면 밖으로 나가지 않게 스크롤 보정.
+// textarea 값을 코드로 바꾸면 네이티브 자동 스크롤이 동작하지 않아 뷰가 엉뚱한 곳으로 튀는 문제를 막는다.
+function scrollCaretIntoView() {
+  const lh = lineHeightPx();
+  const before = editor.value.slice(0, editor.selectionStart);
+  const line = (before.match(/\n/g) || []).length;
+  const caretY = line * lh;
+  const pad = 14; // 편집기 padding-top
+  const viewTop = editor.scrollTop, viewH = editor.clientHeight;
+  if (caretY < viewTop + pad) editor.scrollTop = Math.max(0, caretY - pad);
+  else if (caretY + lh > viewTop + viewH - pad) editor.scrollTop = caretY + lh + pad - viewH;
+  syncGutter(); syncHighlightScroll();
+}
 
 /* ============================================================ 거터 / 카운트 / 커서 */
 function lineHeightPx() { const lh = parseFloat(getComputedStyle(editor).lineHeight); return isNaN(lh) ? state.settings.fontSize * 1.5 : lh; }
@@ -369,7 +389,7 @@ function undoHistory() {
   if (!t.und.length) { toast('되돌릴 기록이 없습니다'); return; }
   t.red.push(t.lastCommitted);
   const prev = t.und.pop();
-  editor.value = prev; onEditorChanged(); t.lastCommitted = prev;
+  setValueKeepScroll(editor, prev); onEditorChanged(); t.lastCommitted = prev;
   updateUndoButtons();
   toast(`되돌리기 (남은 기록 ${t.und.length})`);
 }
@@ -379,7 +399,7 @@ function redoHistory() {
   if (!t.red.length) { toast('다시 실행할 기록이 없습니다'); return; }
   t.und.push(t.lastCommitted);
   const nxt = t.red.pop();
-  editor.value = nxt; onEditorChanged(); t.lastCommitted = nxt;
+  setValueKeepScroll(editor, nxt); onEditorChanged(); t.lastCommitted = nxt;
   updateUndoButtons();
 }
 function updateUndoButtons() {
@@ -397,8 +417,14 @@ function onEditorChanged() {
   t.dirty = t.content !== t.savedContent;
   applyHighlight();
   updateGutter(); updateCounts();
+  // 오버레이(문법색)·거터 스크롤을 편집기 현재 위치에 다시 맞춤 — innerHTML 재구성으로 0으로 초기화되며
+  // 붙여넣기 직후 커서와 글자가 어긋나는(포인트가 이상한 곳) 문제를 방지.
+  syncHighlightScroll(); syncGutter();
   clearTimeout(renderTimer);
-  renderTimer = setTimeout(() => { renderPreview(); buildOutline(); }, 80);
+  // HTML 문서는 iframe 전체 재로딩 비용이 커서 미리보기 갱신을 더 길게 디바운스하고,
+  // 편집 전용 모드에서는 미리보기를 아예 갱신하지 않아 편집 속도를 확보한다.
+  const delay = isHtmlDoc(t) ? 450 : 80;
+  renderTimer = setTimeout(() => { if (state.mode !== 'editor') renderPreview(); buildOutline(); }, delay);
   renderTabs();
   scheduleAutoSave();
   scheduleHistoryCommit();
@@ -421,12 +447,135 @@ previewPane.addEventListener('scroll', () => {
   syncPreviewToEditor();
   updateActiveOutline(lineFromPreviewTop(previewPane.scrollTop));
 });
-function editSet(value, caret) { editor.value = value; editor.selectionStart = editor.selectionEnd = caret; onEditorChanged(); }
+function editSet(value, caret) { setValueKeepScroll(editor, value); editor.selectionStart = editor.selectionEnd = caret; onEditorChanged(); scrollCaretIntoView(); }
+
+/* ---- 표 편집 도우미: Tab=다음 셀, Shift+Tab=이전 셀, Enter=행 추가, 이동 시 파이프 자동 정렬 ---- */
+function isTableLine(ln) { return /^\s*\|/.test(ln); }
+function isSepLine(ln) { return isTableLine(ln) && /^[\s|:\-]+$/.test(ln) && ln.includes('-'); }
+// 표시 폭(한글 등 전각 = 2칸) — D2Coding 고정폭 기준 파이프 정렬용
+function dispWidth(s) {
+  let w = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    w += (c >= 0x1100 && (c <= 0x115F || (c >= 0x2E80 && c <= 0xA4CF) || (c >= 0xAC00 && c <= 0xD7A3)
+      || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFF60)
+      || (c >= 0xFFE0 && c <= 0xFFE6))) ? 2 : 1;
+  }
+  return w;
+}
+function parseCells(ln) {
+  let t = ln.trim();
+  if (t.startsWith('|')) t = t.slice(1);
+  if (t.endsWith('|')) t = t.slice(0, -1);
+  return t.split('|').map(c => c.trim());
+}
+// 캐럿이 속한 표 블록(연속된 | 시작 줄들) 정보. 표가 아니면 null
+function tableAt(v, caret) {
+  const before = v.slice(0, caret);
+  const li = before.split('\n').length - 1;
+  const lines = v.split('\n');
+  if (!isTableLine(lines[li] || '')) return null;
+  let a = li, b = li;
+  while (a > 0 && isTableLine(lines[a - 1])) a--;
+  while (b < lines.length - 1 && isTableLine(lines[b + 1])) b++;
+  return { lines, a, b, li, lineStart: before.lastIndexOf('\n') + 1 };
+}
+function tableCols(tb) {
+  let n = 1;
+  for (let i = tb.a; i <= tb.b; i++) if (!isSepLine(tb.lines[i])) n = Math.max(n, parseCells(tb.lines[i]).length);
+  return n;
+}
+// 블록(a..b)을 열 폭에 맞춰 재정렬해 쓰고, 대상 셀 내용을 선택(캐럿 배치)
+function formatTableAndPlace(lines, a, b, targetLi, targetCol) {
+  const indent = (lines[a].match(/^\s*/) || [''])[0];
+  const rows = [];
+  for (let i = a; i <= b; i++) rows.push({ sep: isSepLine(lines[i]), cells: parseCells(lines[i]) });
+  let nCols = 1;
+  for (const r of rows) if (!r.sep) nCols = Math.max(nCols, r.cells.length);
+  for (const r of rows) while (r.cells.length < nCols) r.cells.push(r.sep ? '---' : '');
+  const wid = Array(nCols).fill(3);
+  for (const r of rows) if (!r.sep) r.cells.forEach((c, i) => { if (i < nCols) wid[i] = Math.max(wid[i], dispWidth(c)); });
+  const sepRow = rows.find(r => r.sep);
+  const aligns = Array.from({ length: nCols }, (_, i) => {
+    const c = sepRow ? (sepRow.cells[i] || '') : '';
+    const l = c.startsWith(':'), r = c.endsWith(':');
+    return l && r ? 'c' : r ? 'r' : l ? 'l' : '';
+  });
+  const fmt = rows.map(r => {
+    const segs = r.cells.slice(0, nCols).map((c, i) => {
+      const w = wid[i]; // 각 세그먼트 총폭 = w + 2 (양옆 공백/콜론 포함)
+      if (r.sep) {
+        if (aligns[i] === 'c') return ':' + '-'.repeat(w) + ':';
+        if (aligns[i] === 'r') return '-'.repeat(w + 1) + ':';
+        if (aligns[i] === 'l') return ':' + '-'.repeat(w + 1);
+        return '-'.repeat(w + 2);
+      }
+      return ' ' + c + ' '.repeat(w - dispWidth(c)) + ' ';
+    });
+    return indent + '|' + segs.join('|') + '|';
+  });
+  const newLines = lines.slice(0, a).concat(fmt, lines.slice(b + 1));
+  let off = 0;
+  for (let i = 0; i < targetLi; i++) off += newLines[i].length + 1;
+  let x = indent.length + 1; // 첫 파이프 다음
+  for (let j = 0; j < targetCol; j++) x += wid[j] + 3; // 세그먼트(w+2) + 파이프
+  x += 1; // 셀 앞 공백
+  const rowObj = rows[targetLi - a];
+  const content = rowObj && !rowObj.sep ? (rowObj.cells[targetCol] || '') : '';
+  setValueKeepScroll(editor, newLines.join('\n'));
+  editor.selectionStart = off + x;
+  editor.selectionEnd = off + x + content.length; // 셀 내용 선택 → 바로 덮어쓰기
+  onEditorChanged(); scrollCaretIntoView();
+}
+function tableTab(back) {
+  const v = editor.value, s = editor.selectionStart;
+  const tb = tableAt(v, s); if (!tb) return false;
+  if (isSepLine(tb.lines[tb.li])) return false;
+  const dataIdx = [];
+  for (let i = tb.a; i <= tb.b; i++) if (!isSepLine(tb.lines[i])) dataIdx.push(i);
+  const nCols = tableCols(tb);
+  const pipes = (tb.lines[tb.li].slice(0, s - tb.lineStart).match(/\|/g) || []).length;
+  const col = Math.min(Math.max(0, pipes - 1), nCols - 1);
+  let r = dataIdx.indexOf(tb.li), c = col + (back ? -1 : 1);
+  if (c >= nCols) { r++; c = 0; }
+  if (c < 0) { r--; c = nCols - 1; if (r < 0) return false; }
+  let lines = tb.lines, b = tb.b;
+  if (r >= dataIdx.length) { // 마지막 셀에서 Tab → 새 행 추가
+    const blank = '|' + Array(nCols).fill('  ').join('|') + '|';
+    lines = lines.slice(0, b + 1).concat([blank], lines.slice(b + 1));
+    b++; dataIdx.push(b);
+  }
+  formatTableAndPlace(lines, tb.a, b, dataIdx[r], c);
+  return true;
+}
+function tableEnter() {
+  const v = editor.value, s = editor.selectionStart;
+  const tb = tableAt(v, s); if (!tb) return false;
+  if (isSepLine(tb.lines[tb.li])) return false;
+  if (parseCells(tb.lines[tb.li]).every(c => !c)) {
+    // 빈 행에서 Enter → 행을 지우고 표 밖으로 (목록 종료와 동일한 UX)
+    const lines = tb.lines.slice();
+    lines[tb.li] = '';
+    let off = 0;
+    for (let i = 0; i < tb.li; i++) off += lines[i].length + 1;
+    editSet(lines.join('\n'), off);
+    return true;
+  }
+  let at = tb.li;
+  if (at + 1 <= tb.b && isSepLine(tb.lines[at + 1])) at++; // 헤더에서 Enter → 구분행 다음에 삽입
+  const blank = '|' + Array(tableCols(tb)).fill('  ').join('|') + '|';
+  const lines = tb.lines.slice(0, at + 1).concat([blank], tb.lines.slice(at + 1));
+  formatTableAndPlace(lines, tb.a, tb.b + 1, at + 1, 0);
+  return true;
+}
+
 editor.addEventListener('keydown', (e) => {
+  if (e.isComposing) return; // 한글 IME 조합 중에는 기본 동작
   const s = editor.selectionStart, en = editor.selectionEnd;
   const v = editor.value;
   if (e.key === 'Tab') {
     e.preventDefault();
+    if (s === en && tableTab(e.shiftKey)) return; // 표 안: 셀 이동
     if (s !== en) {
       // 선택 영역: 선택된 모든 줄을 통째로 들여쓰기(Tab) / 내어쓰기(Shift+Tab)
       const blockStart = v.lastIndexOf('\n', s - 1) + 1;
@@ -449,10 +598,10 @@ editor.addEventListener('keydown', (e) => {
         }
       });
       const newRegion = out.join('\n') + (trailingNL ? '\n' : '');
-      editor.value = v.slice(0, blockStart) + newRegion + v.slice(en);
+      setValueKeepScroll(editor, v.slice(0, blockStart) + newRegion + v.slice(en));
       editor.selectionStart = Math.max(blockStart, s + firstDelta);
       editor.selectionEnd = Math.max(blockStart, en + totalDelta);
-      onEditorChanged();
+      onEditorChanged(); scrollCaretIntoView();
       return;
     }
     const lineStart = v.lastIndexOf('\n', s - 1) + 1;
@@ -463,6 +612,7 @@ editor.addEventListener('keydown', (e) => {
       editSet(v.slice(0, s) + '    ' + v.slice(en), s + 4);
     }
   } else if (e.key === 'Enter' && s === en) {
+    if (tableEnter()) { e.preventDefault(); return; } // 표 안: 행 추가/탈출
     // 자동 들여쓰기 + 목록 마커 이어쓰기
     const lineStart = v.lastIndexOf('\n', s - 1) + 1;
     const line = v.slice(lineStart, s);
@@ -577,6 +727,7 @@ function renderTabs() {
     if (t.id === state.split2Id) return; // 분리된 탭은 오른쪽 보조 탭바에 표시
     const el = document.createElement('div');
     el.className = 'tab' + (t.id === state.activeId ? ' active' : '');
+    el.dataset.tabId = t.id;
     el.draggable = true;
     el.addEventListener('dragstart', (e) => {
       draggingTabId = t.id;
@@ -598,6 +749,7 @@ function renderTabs() {
     el.appendChild(close);
     el.addEventListener('click', () => activateTab(t.id));
     el.addEventListener('mousedown', (e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } });
+    el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); showTabCtxMenu(e.clientX, e.clientY, t); });
     tabbar.appendChild(el);
   });
   const add = document.createElement('div');
@@ -787,6 +939,7 @@ function renderTreeNodes(nodes) {
       const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = '📁';
       const label = document.createElement('span'); label.textContent = node.name;
       item.append(tw, ic, label);
+      item.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); showDirCtxMenu(e.clientX, e.clientY, node, label); });
       const children = document.createElement('div'); children.className = 'tree-children';
       if (!expanded) children.style.display = 'none';
       children.appendChild(renderTreeNodes(node.children));
@@ -804,6 +957,7 @@ function renderTreeNodes(nodes) {
       item.append(tw, ic, label);
       item.dataset.path = node.path;
       item.addEventListener('click', () => openPath(node.path));
+      item.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); showFileCtxMenu(e.clientX, e.clientY, node, label); });
       item.draggable = true;
       item.addEventListener('dragstart', (e) => {
         draggingTreePath = node.path;
@@ -1000,16 +1154,16 @@ function applyFormat(fmt) {
   const val = editor.value, sel = val.slice(s, en);
   const wrap = (b, a = b, ph = '텍스트') => {
     const inner = sel || ph;
-    editor.value = val.slice(0, s) + b + inner + a + val.slice(en);
+    setValueKeepScroll(editor, val.slice(0, s) + b + inner + a + val.slice(en));
     editor.selectionStart = s + b.length; editor.selectionEnd = s + b.length + inner.length;
   };
   const lineprefix = (pfx) => {
     const ls = val.lastIndexOf('\n', s - 1) + 1;
-    editor.value = val.slice(0, ls) + pfx + val.slice(ls);
+    setValueKeepScroll(editor, val.slice(0, ls) + pfx + val.slice(ls));
     editor.selectionStart = editor.selectionEnd = en + pfx.length;
   };
   const insert = (txt) => {
-    editor.value = val.slice(0, s) + txt + val.slice(en);
+    setValueKeepScroll(editor, val.slice(0, s) + txt + val.slice(en));
     editor.selectionStart = editor.selectionEnd = s + txt.length;
   };
   switch (fmt) {
@@ -1029,14 +1183,97 @@ function applyFormat(fmt) {
     case 'table': insert('\n| 제목1 | 제목2 |\n|------|------|\n| 내용 | 내용 |\n'); break;
     case 'hr': insert('\n---\n'); break;
   }
-  onEditorChanged();
+  onEditorChanged(); scrollCaretIntoView();
 }
+/* ---- 활성 편집기 커서 위치에 텍스트 삽입 (달력·날짜 등) ---- */
+function activeEditorEl() { return (focusedEditor === 2 && state.split2Id) ? editor2 : editor; }
+function insertText(str) {
+  const ed = activeEditorEl();
+  ed.focus();
+  const s = ed.selectionStart, e = ed.selectionEnd, v = ed.value;
+  setValueKeepScroll(ed, v.slice(0, s) + str + v.slice(e));
+  ed.selectionStart = ed.selectionEnd = s + str.length;
+  if (ed === editor2) onEditor2Changed();
+  else { onEditorChanged(); scrollCaretIntoView(); }
+}
+/* ---- 날짜 토큰: MM/DD(요일) ---- */
+const WD_KR = ['일', '월', '화', '수', '목', '금', '토'];
+function pad2(n) { return String(n).padStart(2, '0'); }
+function fmtDateTok(d) { return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}(${WD_KR[d.getDay()]})`; }
 $('#toolbar').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-fmt]');
   if (b) applyFormat(b.dataset.fmt);
 });
 $('#tb-undo').addEventListener('click', undoHistory);
 $('#tb-redo').addEventListener('click', redoHistory);
+
+/* ============================================================ 달력(날짜 삽입) */
+const calPopup = $('#calendar-popup');
+let calY = null, calM = null;
+function renderCalendar() {
+  const startDow = new Date(calY, calM, 1).getDay();
+  const daysIn = new Date(calY, calM + 1, 0).getDate();
+  const today = new Date();
+  const isToday = (d) => calY === today.getFullYear() && calM === today.getMonth() && d === today.getDate();
+  let h = `<div class="cal-head"><button class="cal-nav" data-nav="-1" title="이전 달">‹</button>`
+    + `<span class="cal-title">${calY}년 ${calM + 1}월</span>`
+    + `<button class="cal-nav" data-nav="1" title="다음 달">›</button></div><div class="cal-grid">`;
+  for (const w of WD_KR) h += `<div class="cal-wd ${w === '일' ? 'sun' : w === '토' ? 'sat' : ''}">${w}</div>`;
+  for (let i = 0; i < startDow; i++) h += `<div class="cal-day empty"></div>`;
+  for (let d = 1; d <= daysIn; d++) {
+    const dow = (startDow + d - 1) % 7;
+    h += `<div class="cal-day${isToday(d) ? ' today' : ''}${dow === 0 ? ' sun' : dow === 6 ? ' sat' : ''}" data-day="${d}" title="클릭: 날짜 삽입 · 우클릭: 데일리 노트">${d}</div>`;
+  }
+  h += `</div><div class="cal-foot"><button class="cal-today">📅 오늘 삽입</button><button class="cal-daily">📓 오늘 노트</button></div>`;
+  calPopup.innerHTML = h;
+}
+// 데일리 노트: 첫 번째 폴더의 "데일리 노트\YYYY-MM-DD.md" 를 열거나 생성
+async function openDailyNote(d) {
+  if (!state.vaults.length) { toast('데일리 노트를 만들려면 폴더를 먼저 여세요 (Ctrl+Shift+O)'); return; }
+  const v0 = state.vaults[0];
+  const name = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const fp = v0.root + '\\데일리 노트\\' + name + '.md';
+  const res = await window.api.ensureFile(fp, `# ${name} (${WD_KR[d.getDay()]})\n\n`);
+  if (!res || res.error) { toast('데일리 노트를 만들 수 없습니다'); return; }
+  if (res.created) { await refreshVault(v0); toast(`데일리 노트 생성: ${name}.md`); }
+  await openPath(res.path);
+}
+function openCalendar(anchor) {
+  const now = new Date();
+  if (calY == null) { calY = now.getFullYear(); calM = now.getMonth(); }
+  renderCalendar();
+  calPopup.classList.remove('hidden');
+  const r = anchor.getBoundingClientRect();
+  calPopup.style.left = Math.min(r.left, window.innerWidth - 258) + 'px';
+  calPopup.style.top = Math.min(r.bottom + 4, window.innerHeight - 300) + 'px';
+}
+function closeCalendar() { calPopup.classList.add('hidden'); }
+calPopup.addEventListener('click', (e) => {
+  const nav = e.target.closest('.cal-nav');
+  if (nav) { calM += (+nav.dataset.nav); if (calM < 0) { calM = 11; calY--; } else if (calM > 11) { calM = 0; calY++; } renderCalendar(); return; }
+  const day = e.target.closest('.cal-day[data-day]');
+  if (day) { insertText(fmtDateTok(new Date(calY, calM, +day.dataset.day))); closeCalendar(); return; }
+  if (e.target.closest('.cal-today')) { insertText(fmtDateTok(new Date())); closeCalendar(); return; }
+  if (e.target.closest('.cal-daily')) { openDailyNote(new Date()); closeCalendar(); }
+});
+// 달력 날짜 우클릭 → 데일리 노트 / 날짜 삽입 선택
+calPopup.addEventListener('contextmenu', (e) => {
+  const day = e.target.closest('.cal-day[data-day]');
+  if (!day) return;
+  e.preventDefault();
+  const d = new Date(calY, calM, +day.dataset.day);
+  showCtxMenu(e.clientX, e.clientY, [
+    { label: '📓 데일리 노트 열기/생성', action: () => { openDailyNote(d); closeCalendar(); } },
+    { label: '✏️ 날짜 삽입', action: () => { insertText(fmtDateTok(d)); closeCalendar(); } }
+  ]);
+});
+$('#tb-calendar').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (calPopup.classList.contains('hidden')) openCalendar(e.currentTarget); else closeCalendar();
+});
+window.addEventListener('mousedown', (e) => {
+  if (!e.target.closest('#calendar-popup') && !e.target.closest('#tb-calendar')) closeCalendar();
+});
 
 /* ============================================================ 커맨드 팔레트 */
 const paletteOverlay = $('#palette-overlay');
@@ -1049,6 +1286,7 @@ const commands = [
   { name: '검색 (현재 파일)', kbd: 'Ctrl+F', run: () => openSearch('current') },
   { name: '검색 (폴더 전체)', kbd: 'Ctrl+Shift+F', run: () => openSearch('folder') },
   { name: '바꾸기', kbd: 'Ctrl+H', run: () => openSearch(null, true) },
+  { name: '오늘 데일리 노트', kbd: '', run: () => openDailyNote(new Date()) },
   { name: '새 탭', kbd: '', run: () => { const w = newTab({ content: '' }); activateTab(w.id); } },
   { name: '파일 열기', kbd: 'Ctrl+O', run: openFile },
   { name: '현재 탭 닫기', kbd: 'Ctrl+W', run: () => active() && closeTab(state.activeId) },
@@ -1064,15 +1302,45 @@ const commands = [
 let palSel = 0, palFiltered = commands;
 function openPalette() { paletteOverlay.classList.remove('hidden'); paletteInput.value = ''; renderPalette(''); paletteInput.focus(); }
 function closePalette() { paletteOverlay.classList.add('hidden'); }
+// 퍼지 매칭: 질의의 글자가 순서대로 모두 나타나면 매칭 (예: "회예" → "회의록 예시.md")
+function fuzzyMatch(s, q) {
+  let i = 0;
+  for (const ch of s) { if (ch === q[i]) i++; if (i === q.length) return true; }
+  return false;
+}
+// 팔레트 항목 = 명령 + 열린 폴더의 파일(퀵오픈). 검색어가 있으면 파일 우선
+function paletteEntries(q) {
+  const cmds = commands.filter(c => c.name.toLowerCase().includes(q));
+  const scored = [];
+  if (state.vaults.length) {
+    for (const f of flattenVaultFiles()) {
+      const n = f.name.toLowerCase();
+      let sc = -1;
+      if (!q) sc = 0;
+      else if (n.startsWith(q)) sc = 4;
+      else if (n.includes(q)) sc = 3;
+      else if (fuzzyMatch(n, q)) sc = 2;
+      else if (f.path.toLowerCase().includes(q)) sc = 1;
+      if (sc >= 0) scored.push({ f, sc });
+    }
+    scored.sort((x, y) => y.sc - x.sc || x.f.name.localeCompare(y.f.name));
+  }
+  const files = scored.slice(0, q ? 30 : 8).map(({ f }) => ({
+    name: fileIcon(f.name) + ' ' + f.name,
+    kbd: f.path.replace(/[\\/][^\\/]*$/, '').replace(/^.*[\\/]/, ''), // 상위 폴더명 힌트
+    run: () => openPath(f.path)
+  }));
+  return q ? [...files, ...cmds] : [...cmds, ...files];
+}
 function renderPalette(q) {
   q = q.toLowerCase().trim();
-  palFiltered = commands.filter(c => c.name.toLowerCase().includes(q));
+  palFiltered = paletteEntries(q);
   palSel = 0; paletteListEl.innerHTML = '';
   palFiltered.forEach((c, i) => {
     const li = document.createElement('li');
     if (i === 0) li.classList.add('sel');
     const a = document.createElement('span'); a.textContent = c.name;
-    const k = document.createElement('span'); k.className = 'kbd'; k.textContent = c.kbd;
+    const k = document.createElement('span'); k.className = 'kbd'; k.textContent = c.kbd || '';
     li.append(a, k);
     li.addEventListener('click', () => { closePalette(); c.run(); });
     li.addEventListener('mousemove', () => selPalette(i));
@@ -1330,9 +1598,9 @@ function replaceOne() {
   const matched = m[0];
   const single = buildRegexLocal(q);
   const replaced = matched.replace(single, replaceInput.value);
-  editor.value = val.slice(0, m.index) + replaced + val.slice(m.index + matched.length);
+  setValueKeepScroll(editor, val.slice(0, m.index) + replaced + val.slice(m.index + matched.length));
   editor.selectionStart = editor.selectionEnd = m.index + replaced.length;
-  onEditorChanged();
+  onEditorChanged(); scrollCaretIntoView();
   runSearch();
 }
 async function replaceAll() {
@@ -1691,30 +1959,25 @@ window.addEventListener('wheel', (e) => {
 (function puppyEasterEgg() {
   const puppy = $('#puppy');
   if (!puppy) return;
-  // mode 0 = 말티즈 달리기, 1 = 깨댕이 춤, 2 = 깨댕이 멈춤
-  let mode = 0, x = 0, dir = 1, t = 0;
+  // 클릭으로 달리기 ↔ 멈춤 토글
+  let running = true, x = 0, dir = 1, t = 0;
   const MAX = 150, SPEED = 1.2;
   function frame() {
     t++;
-    if (mode === 0) {
+    if (running) {
       x += dir * SPEED;
       if (x >= MAX) { x = MAX; dir = -1; }
       else if (x <= 0) { x = 0; dir = 1; }
       const bob = -Math.abs(Math.sin(t * 0.32)) * 3;
       puppy.style.transform = `translate(${x.toFixed(1)}px, ${bob.toFixed(1)}px) scaleX(${dir})`;
     } else {
-      // 깨댕이 모드: 제자리(왼쪽 끝)로 부드럽게 복귀, 춤은 CSS 가 처리
-      x += (0 - x) * 0.2;
-      if (x < 0.6) x = 0;
-      puppy.style.transform = `translate(${x.toFixed(1)}px, 0px)`;
+      puppy.style.transform = `translate(${x.toFixed(1)}px, 0px) scaleX(${dir})`;
     }
     requestAnimationFrame(frame);
   }
   puppy.addEventListener('click', () => {
-    mode = (mode + 1) % 3;
-    puppy.dataset.mode = String(mode);
-    puppy.classList.toggle('running', mode === 0);
-    if (mode === 0) { x = 0; dir = 1; }
+    running = !running;
+    puppy.classList.toggle('running', running);
   });
   puppy.addEventListener('contextmenu', (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -1750,6 +2013,137 @@ window.api.onCtxClaude((text) => {
   if (text) claudeText.value = text.length > 400 ? text : `다음 내용에 대해: \n${text}\n\n`;
   claudeText.focus();
 });
+// 편집기 네이티브 우클릭 → 오늘 날짜 삽입
+window.api.onCtxInsertDate(() => { insertText(fmtDateTok(new Date())); });
+
+/* ============================================================ 탐색기/탭 우클릭 메뉴 + 파일 조작 */
+// dirty 확인 없이 탭 닫기 (파일 삭제 등 내부 처리용)
+function forceCloseTab(id) {
+  const idx = state.tabs.findIndex(t => t.id === id); if (idx < 0) return;
+  if (id === state.split2Id) closeSplit2();
+  state.tabs.splice(idx, 1);
+  if (state.activeId === id) {
+    if (state.tabs.length) activateTab(state.tabs[Math.max(0, idx - 1)].id);
+    else { const w = newTab({ content: '' }); activateTab(w.id); }
+  } else renderTabs();
+}
+// 이름 변경 후 열려있는 탭의 경로/이름 갱신 (폴더 이름 변경 시 하위 파일 경로도 접두어 교체)
+function updateTabsForRename(oldPath, newPath, isDir) {
+  const oldLow = oldPath.toLowerCase();
+  for (const t of state.tabs) {
+    if (!t.filePath) continue;
+    const fpLow = t.filePath.toLowerCase();
+    if (isDir) {
+      if (fpLow.startsWith(oldLow + '\\') || fpLow.startsWith(oldLow + '/')) {
+        t.filePath = newPath + t.filePath.slice(oldPath.length);
+      }
+    } else if (fpLow === oldLow) {
+      t.filePath = newPath; t.name = newPath.replace(/^.*[\\/]/, '');
+    }
+  }
+  const a = active();
+  if (a) { statusPath.textContent = a.filePath || ''; setDocTitle(a.name); }
+  renderTabs();
+}
+async function renameEntry(node, newName, labelSpan) {
+  const name = (newName || '').trim();
+  if (!name || name === node.name) { renderVaults(); return; }
+  if (/[\\/:*?"<>|]/.test(name)) { toast('이름에 \\ / : * ? " < > | 는 쓸 수 없습니다'); renderVaults(); return; }
+  const res = await window.api.renameFile(node.path, name);
+  if (!res || res.error) {
+    toast(res && res.error === 'exists' ? '같은 이름이 이미 있습니다' : '이름 변경 실패'); renderVaults(); return;
+  }
+  updateTabsForRename(node.path, res.path, node.type === 'dir');
+  for (const v of state.vaults) if (res.path.toLowerCase().startsWith(v.root.toLowerCase())) await refreshVault(v);
+  persist(); toast('이름을 변경했습니다');
+}
+function startTreeRename(node, labelSpan) {
+  if (!labelSpan || !labelSpan.parentNode) return;
+  const input = document.createElement('input');
+  input.className = 'tree-rename'; input.value = node.name;
+  labelSpan.replaceWith(input);
+  input.focus();
+  const dot = node.name.lastIndexOf('.');
+  if (node.type === 'file' && dot > 0) input.setSelectionRange(0, dot); else input.select();
+  let done = false;
+  const finish = (commit) => { if (done) return; done = true; if (commit) renameEntry(node, input.value, labelSpan); else renderVaults(); };
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', (e) => e.stopPropagation());
+}
+async function deleteEntry(node) {
+  const isDir = node.type === 'dir';
+  if (!confirm(`"${node.name}"${isDir ? ' 폴더 전체' : ''}을(를) 휴지통으로 보낼까요?`)) return;
+  const res = await window.api.trashItem(node.path);
+  if (!res || res.error) { toast('삭제 실패'); return; }
+  const low = node.path.toLowerCase();
+  for (const t of [...state.tabs]) {
+    if (!t.filePath) continue;
+    const fp = t.filePath.toLowerCase();
+    if (fp === low || (isDir && (fp.startsWith(low + '\\') || fp.startsWith(low + '/')))) forceCloseTab(t.id);
+  }
+  for (const v of state.vaults) if (node.path.toLowerCase().startsWith(v.root.toLowerCase())) await refreshVault(v);
+  persist(); toast('휴지통으로 보냈습니다');
+}
+async function createNewFile(dirPath) {
+  const res = await window.api.createFile(dirPath);
+  if (!res || !res.path) { toast('파일 생성 실패'); return; }
+  for (const v of state.vaults) if (res.path.toLowerCase().startsWith(v.root.toLowerCase())) await refreshVault(v);
+  await openPath(res.path); revealInTree(res.path);
+}
+function showFileCtxMenu(x, y, node, labelSpan) {
+  showCtxMenu(x, y, [
+    { label: '📄 열기', action: () => openPath(node.path) },
+    { label: '⬌ 오른쪽에 열기', action: () => openSplit2ByPath(node.path) },
+    { label: '✏️ 이름 바꾸기', action: () => startTreeRename(node, labelSpan) },
+    { label: '📋 경로 복사', action: () => { window.api.copyText(node.path); toast('경로를 복사했습니다'); } },
+    { label: '📁 탐색기에서 보기', action: () => window.api.showItem(node.path) },
+    { label: '🗑️ 삭제(휴지통)', action: () => deleteEntry(node) }
+  ]);
+}
+function showDirCtxMenu(x, y, node, labelSpan) {
+  showCtxMenu(x, y, [
+    { label: '📄 새 파일', action: () => createNewFile(node.path) },
+    { label: '✏️ 이름 바꾸기', action: () => startTreeRename(node, labelSpan) },
+    { label: '📂 탐색기에서 열기', action: () => window.api.showItem(node.path) },
+    { label: '🗑️ 삭제(휴지통)', action: () => deleteEntry(node) }
+  ]);
+}
+function closeOtherTabs(keepId) { for (const t of [...state.tabs]) if (t.id !== keepId) closeTab(t.id); }
+function closeAllTabs() { for (const t of [...state.tabs]) closeTab(t.id); }
+function renameTab(t) {
+  const el = tabbar.querySelector(`.tab[data-tab-id="${t.id}"]`);
+  const span = el && el.querySelector('.tname');
+  if (span) startRename(t, span);
+}
+async function deleteTabFile(t) {
+  if (!t.filePath) return;
+  if (!confirm(`"${t.name}" 파일을 휴지통으로 보낼까요?`)) return;
+  const res = await window.api.trashItem(t.filePath);
+  if (!res || res.error) { toast('삭제 실패'); return; }
+  const p = t.filePath; forceCloseTab(t.id);
+  for (const v of state.vaults) if (p.toLowerCase().startsWith(v.root.toLowerCase())) await refreshVault(v);
+  toast('휴지통으로 보냈습니다');
+}
+function showTabCtxMenu(x, y, t) {
+  const items = [
+    { label: '✖ 닫기', action: () => closeTab(t.id) },
+    { label: '다른 탭 닫기', action: () => closeOtherTabs(t.id) },
+    { label: '모든 탭 닫기', action: () => closeAllTabs() }
+  ];
+  if (state.tabs.length > 1) items.push({ label: '⬌ 오른쪽에 분할', action: () => openSplit2(t.id) });
+  items.push({ label: '✏️ 이름 바꾸기', action: () => renameTab(t) });
+  if (t.filePath) {
+    items.push({ label: '📋 경로 복사', action: () => { window.api.copyText(t.filePath); toast('경로를 복사했습니다'); } });
+    items.push({ label: '📁 탐색기에서 보기', action: () => window.api.showItem(t.filePath) });
+    items.push({ label: '🗑️ 파일 삭제(휴지통)', action: () => deleteTabFile(t) });
+  }
+  showCtxMenu(x, y, items);
+}
 
 /* ============================================================ 분할 편집(두 파일) */
 const editor2 = $('#editor2');
@@ -1888,11 +2282,35 @@ editor2.addEventListener('keydown', (e) => {
     e.preventDefault();
     const s = editor2.selectionStart, en = editor2.selectionEnd;
     const v = editor2.value;
-    editor2.value = v.slice(0, s) + '    ' + v.slice(en);
+    setValueKeepScroll(editor2, v.slice(0, s) + '    ' + v.slice(en));
     editor2.selectionStart = editor2.selectionEnd = s + 4;
     onEditor2Changed();
   }
 });
+/* ============================================================ 클립보드 이미지 붙여넣기 */
+// 스크린샷 등 이미지를 Ctrl+V → 노트 옆 "첨부" 폴더에 저장 + ![]() 링크 삽입.
+// 텍스트가 함께 들어있으면(엑셀 셀 복사 등) 텍스트 붙여넣기를 우선한다.
+async function handleImagePaste(e, ed) {
+  const cd = e.clipboardData;
+  if (!cd || (cd.getData('text/plain') || '').length) return;
+  let img = null;
+  for (const it of cd.items) if (it.kind === 'file' && it.type.startsWith('image/')) { img = it; break; }
+  if (!img) return;
+  e.preventDefault();
+  const t = ed === editor2 ? split2Tab() : active();
+  if (!t || !t.filePath) { toast('이미지를 넣으려면 노트를 먼저 파일로 저장하세요 (Ctrl+S)'); return; }
+  const file = img.getAsFile(); if (!file) return;
+  const data = new Uint8Array(await file.arrayBuffer());
+  const ext = (img.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+  const dir = t.filePath.replace(/[\\/][^\\/]*$/, '');
+  const res = await window.api.savePastedImage(dir, data, ext);
+  if (!res || res.error) { toast('이미지 저장 실패'); return; }
+  insertText(`![](${res.rel})`);
+  toast(`이미지 저장: ${res.rel}`);
+}
+editor.addEventListener('paste', (e) => { handleImagePaste(e, editor); });
+editor2.addEventListener('paste', (e) => { handleImagePaste(e, editor2); });
+
 // 탭을 오른쪽으로 끌어다 놓으면 분할 편집
 const splitHint = $('#split-drop-hint');
 function showSplitHint(on) { if (splitHint) splitHint.classList.toggle('hidden', !on); }

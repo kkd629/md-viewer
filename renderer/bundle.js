@@ -54141,7 +54141,7 @@ ${text}</tr>
     }
     if (!done) return;
     const caret2 = Math.min(editor.selectionStart, editor.value.length);
-    editor.value = lines.join("\n");
+    setValueKeepScroll(editor, lines.join("\n"));
     editor.selectionStart = editor.selectionEnd = caret2;
     onEditorChanged();
   }
@@ -54265,6 +54265,24 @@ ${text}</tr>
   function syncHighlightScroll() {
     hl.scrollTop = editor.scrollTop;
     hl.scrollLeft = editor.scrollLeft;
+  }
+  function setValueKeepScroll(ed, value) {
+    const st = ed.scrollTop, sl = ed.scrollLeft;
+    ed.value = value;
+    ed.scrollTop = st;
+    ed.scrollLeft = sl;
+  }
+  function scrollCaretIntoView() {
+    const lh = lineHeightPx();
+    const before = editor.value.slice(0, editor.selectionStart);
+    const line = (before.match(/\n/g) || []).length;
+    const caretY = line * lh;
+    const pad = 14;
+    const viewTop = editor.scrollTop, viewH = editor.clientHeight;
+    if (caretY < viewTop + pad) editor.scrollTop = Math.max(0, caretY - pad);
+    else if (caretY + lh > viewTop + viewH - pad) editor.scrollTop = caretY + lh + pad - viewH;
+    syncGutter();
+    syncHighlightScroll();
   }
   function lineHeightPx() {
     const lh = parseFloat(getComputedStyle(editor).lineHeight);
@@ -54390,7 +54408,7 @@ ${text}</tr>
     }
     t.red.push(t.lastCommitted);
     const prev = t.und.pop();
-    editor.value = prev;
+    setValueKeepScroll(editor, prev);
     onEditorChanged();
     t.lastCommitted = prev;
     updateUndoButtons();
@@ -54406,7 +54424,7 @@ ${text}</tr>
     }
     t.und.push(t.lastCommitted);
     const nxt = t.red.pop();
-    editor.value = nxt;
+    setValueKeepScroll(editor, nxt);
     onEditorChanged();
     t.lastCommitted = nxt;
     updateUndoButtons();
@@ -54427,11 +54445,14 @@ ${text}</tr>
     applyHighlight();
     updateGutter();
     updateCounts();
+    syncHighlightScroll();
+    syncGutter();
     clearTimeout(renderTimer);
+    const delay = isHtmlDoc(t) ? 450 : 80;
     renderTimer = setTimeout(() => {
-      renderPreview();
+      if (state.mode !== "editor") renderPreview();
       buildOutline();
-    }, 80);
+    }, delay);
     renderTabs();
     scheduleAutoSave();
     scheduleHistoryCommit();
@@ -54460,15 +54481,147 @@ ${text}</tr>
     updateActiveOutline(lineFromPreviewTop(previewPane.scrollTop));
   });
   function editSet(value, caret2) {
-    editor.value = value;
+    setValueKeepScroll(editor, value);
     editor.selectionStart = editor.selectionEnd = caret2;
     onEditorChanged();
+    scrollCaretIntoView();
+  }
+  function isTableLine(ln) {
+    return /^\s*\|/.test(ln);
+  }
+  function isSepLine(ln) {
+    return isTableLine(ln) && /^[\s|:\-]+$/.test(ln) && ln.includes("-");
+  }
+  function dispWidth(s) {
+    let w = 0;
+    for (const ch of s) {
+      const c = ch.codePointAt(0);
+      w += c >= 4352 && (c <= 4447 || c >= 11904 && c <= 42191 || c >= 44032 && c <= 55203 || c >= 63744 && c <= 64255 || c >= 65072 && c <= 65103 || c >= 65280 && c <= 65376 || c >= 65504 && c <= 65510) ? 2 : 1;
+    }
+    return w;
+  }
+  function parseCells(ln) {
+    let t = ln.trim();
+    if (t.startsWith("|")) t = t.slice(1);
+    if (t.endsWith("|")) t = t.slice(0, -1);
+    return t.split("|").map((c) => c.trim());
+  }
+  function tableAt(v, caret2) {
+    const before = v.slice(0, caret2);
+    const li = before.split("\n").length - 1;
+    const lines = v.split("\n");
+    if (!isTableLine(lines[li] || "")) return null;
+    let a = li, b = li;
+    while (a > 0 && isTableLine(lines[a - 1])) a--;
+    while (b < lines.length - 1 && isTableLine(lines[b + 1])) b++;
+    return { lines, a, b, li, lineStart: before.lastIndexOf("\n") + 1 };
+  }
+  function tableCols(tb) {
+    let n = 1;
+    for (let i = tb.a; i <= tb.b; i++) if (!isSepLine(tb.lines[i])) n = Math.max(n, parseCells(tb.lines[i]).length);
+    return n;
+  }
+  function formatTableAndPlace(lines, a, b, targetLi, targetCol) {
+    const indent = (lines[a].match(/^\s*/) || [""])[0];
+    const rows = [];
+    for (let i = a; i <= b; i++) rows.push({ sep: isSepLine(lines[i]), cells: parseCells(lines[i]) });
+    let nCols = 1;
+    for (const r of rows) if (!r.sep) nCols = Math.max(nCols, r.cells.length);
+    for (const r of rows) while (r.cells.length < nCols) r.cells.push(r.sep ? "---" : "");
+    const wid = Array(nCols).fill(3);
+    for (const r of rows) if (!r.sep) r.cells.forEach((c, i) => {
+      if (i < nCols) wid[i] = Math.max(wid[i], dispWidth(c));
+    });
+    const sepRow = rows.find((r) => r.sep);
+    const aligns = Array.from({ length: nCols }, (_, i) => {
+      const c = sepRow ? sepRow.cells[i] || "" : "";
+      const l = c.startsWith(":"), r = c.endsWith(":");
+      return l && r ? "c" : r ? "r" : l ? "l" : "";
+    });
+    const fmt = rows.map((r) => {
+      const segs = r.cells.slice(0, nCols).map((c, i) => {
+        const w = wid[i];
+        if (r.sep) {
+          if (aligns[i] === "c") return ":" + "-".repeat(w) + ":";
+          if (aligns[i] === "r") return "-".repeat(w + 1) + ":";
+          if (aligns[i] === "l") return ":" + "-".repeat(w + 1);
+          return "-".repeat(w + 2);
+        }
+        return " " + c + " ".repeat(w - dispWidth(c)) + " ";
+      });
+      return indent + "|" + segs.join("|") + "|";
+    });
+    const newLines = lines.slice(0, a).concat(fmt, lines.slice(b + 1));
+    let off = 0;
+    for (let i = 0; i < targetLi; i++) off += newLines[i].length + 1;
+    let x = indent.length + 1;
+    for (let j = 0; j < targetCol; j++) x += wid[j] + 3;
+    x += 1;
+    const rowObj = rows[targetLi - a];
+    const content = rowObj && !rowObj.sep ? rowObj.cells[targetCol] || "" : "";
+    setValueKeepScroll(editor, newLines.join("\n"));
+    editor.selectionStart = off + x;
+    editor.selectionEnd = off + x + content.length;
+    onEditorChanged();
+    scrollCaretIntoView();
+  }
+  function tableTab(back) {
+    const v = editor.value, s = editor.selectionStart;
+    const tb = tableAt(v, s);
+    if (!tb) return false;
+    if (isSepLine(tb.lines[tb.li])) return false;
+    const dataIdx = [];
+    for (let i = tb.a; i <= tb.b; i++) if (!isSepLine(tb.lines[i])) dataIdx.push(i);
+    const nCols = tableCols(tb);
+    const pipes = (tb.lines[tb.li].slice(0, s - tb.lineStart).match(/\|/g) || []).length;
+    const col = Math.min(Math.max(0, pipes - 1), nCols - 1);
+    let r = dataIdx.indexOf(tb.li), c = col + (back ? -1 : 1);
+    if (c >= nCols) {
+      r++;
+      c = 0;
+    }
+    if (c < 0) {
+      r--;
+      c = nCols - 1;
+      if (r < 0) return false;
+    }
+    let lines = tb.lines, b = tb.b;
+    if (r >= dataIdx.length) {
+      const blank = "|" + Array(nCols).fill("  ").join("|") + "|";
+      lines = lines.slice(0, b + 1).concat([blank], lines.slice(b + 1));
+      b++;
+      dataIdx.push(b);
+    }
+    formatTableAndPlace(lines, tb.a, b, dataIdx[r], c);
+    return true;
+  }
+  function tableEnter() {
+    const v = editor.value, s = editor.selectionStart;
+    const tb = tableAt(v, s);
+    if (!tb) return false;
+    if (isSepLine(tb.lines[tb.li])) return false;
+    if (parseCells(tb.lines[tb.li]).every((c) => !c)) {
+      const lines2 = tb.lines.slice();
+      lines2[tb.li] = "";
+      let off = 0;
+      for (let i = 0; i < tb.li; i++) off += lines2[i].length + 1;
+      editSet(lines2.join("\n"), off);
+      return true;
+    }
+    let at = tb.li;
+    if (at + 1 <= tb.b && isSepLine(tb.lines[at + 1])) at++;
+    const blank = "|" + Array(tableCols(tb)).fill("  ").join("|") + "|";
+    const lines = tb.lines.slice(0, at + 1).concat([blank], tb.lines.slice(at + 1));
+    formatTableAndPlace(lines, tb.a, tb.b + 1, at + 1, 0);
+    return true;
   }
   editor.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;
     const s = editor.selectionStart, en = editor.selectionEnd;
     const v = editor.value;
     if (e.key === "Tab") {
       e.preventDefault();
+      if (s === en && tableTab(e.shiftKey)) return;
       if (s !== en) {
         const blockStart = v.lastIndexOf("\n", s - 1) + 1;
         const region = v.slice(blockStart, en);
@@ -54490,10 +54643,11 @@ ${text}</tr>
           }
         });
         const newRegion = out.join("\n") + (trailingNL ? "\n" : "");
-        editor.value = v.slice(0, blockStart) + newRegion + v.slice(en);
+        setValueKeepScroll(editor, v.slice(0, blockStart) + newRegion + v.slice(en));
         editor.selectionStart = Math.max(blockStart, s + firstDelta);
         editor.selectionEnd = Math.max(blockStart, en + totalDelta);
         onEditorChanged();
+        scrollCaretIntoView();
         return;
       }
       const lineStart = v.lastIndexOf("\n", s - 1) + 1;
@@ -54504,6 +54658,10 @@ ${text}</tr>
         editSet(v.slice(0, s) + "    " + v.slice(en), s + 4);
       }
     } else if (e.key === "Enter" && s === en) {
+      if (tableEnter()) {
+        e.preventDefault();
+        return;
+      }
       const lineStart = v.lastIndexOf("\n", s - 1) + 1;
       const line = v.slice(lineStart, s);
       const indent = (line.match(/^[ \t]*/) || [""])[0];
@@ -54651,6 +54809,7 @@ ${text}</tr>
       if (t.id === state.split2Id) return;
       const el = document.createElement("div");
       el.className = "tab" + (t.id === state.activeId ? " active" : "");
+      el.dataset.tabId = t.id;
       el.draggable = true;
       el.addEventListener("dragstart", (e) => {
         draggingTabId = t.id;
@@ -54698,6 +54857,11 @@ ${text}</tr>
           e.preventDefault();
           closeTab(t.id);
         }
+      });
+      el.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showTabCtxMenu(e.clientX, e.clientY, t);
       });
       tabbar.appendChild(el);
     });
@@ -54981,6 +55145,11 @@ ${text}</tr>
         const label = document.createElement("span");
         label.textContent = node.name;
         item.append(tw, ic, label);
+        item.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          showDirCtxMenu(e.clientX, e.clientY, node, label);
+        });
         const children = document.createElement("div");
         children.className = "tree-children";
         if (!expanded) children.style.display = "none";
@@ -55004,6 +55173,11 @@ ${text}</tr>
         item.append(tw, ic, label);
         item.dataset.path = node.path;
         item.addEventListener("click", () => openPath(node.path));
+        item.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          showFileCtxMenu(e.clientX, e.clientY, node, label);
+        });
         item.draggable = true;
         item.addEventListener("dragstart", (e) => {
           draggingTreePath = node.path;
@@ -55213,17 +55387,17 @@ ${text}</tr>
     const val = editor.value, sel = val.slice(s, en);
     const wrap = (b, a = b, ph = "\uD14D\uC2A4\uD2B8") => {
       const inner = sel || ph;
-      editor.value = val.slice(0, s) + b + inner + a + val.slice(en);
+      setValueKeepScroll(editor, val.slice(0, s) + b + inner + a + val.slice(en));
       editor.selectionStart = s + b.length;
       editor.selectionEnd = s + b.length + inner.length;
     };
     const lineprefix = (pfx) => {
       const ls = val.lastIndexOf("\n", s - 1) + 1;
-      editor.value = val.slice(0, ls) + pfx + val.slice(ls);
+      setValueKeepScroll(editor, val.slice(0, ls) + pfx + val.slice(ls));
       editor.selectionStart = editor.selectionEnd = en + pfx.length;
     };
     const insert = (txt) => {
-      editor.value = val.slice(0, s) + txt + val.slice(en);
+      setValueKeepScroll(editor, val.slice(0, s) + txt + val.slice(en));
       editor.selectionStart = editor.selectionEnd = s + txt.length;
     };
     switch (fmt) {
@@ -55276,6 +55450,29 @@ ${text}</tr>
         break;
     }
     onEditorChanged();
+    scrollCaretIntoView();
+  }
+  function activeEditorEl() {
+    return focusedEditor === 2 && state.split2Id ? editor2 : editor;
+  }
+  function insertText(str) {
+    const ed = activeEditorEl();
+    ed.focus();
+    const s = ed.selectionStart, e = ed.selectionEnd, v = ed.value;
+    setValueKeepScroll(ed, v.slice(0, s) + str + v.slice(e));
+    ed.selectionStart = ed.selectionEnd = s + str.length;
+    if (ed === editor2) onEditor2Changed();
+    else {
+      onEditorChanged();
+      scrollCaretIntoView();
+    }
+  }
+  var WD_KR = ["\uC77C", "\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
+  function pad2(n) {
+    return String(n).padStart(2, "0");
+  }
+  function fmtDateTok(d) {
+    return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}(${WD_KR[d.getDay()]})`;
   }
   $("#toolbar").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-fmt]");
@@ -55283,6 +55480,114 @@ ${text}</tr>
   });
   $("#tb-undo").addEventListener("click", undoHistory);
   $("#tb-redo").addEventListener("click", redoHistory);
+  var calPopup = $("#calendar-popup");
+  var calY = null;
+  var calM = null;
+  function renderCalendar() {
+    const startDow = new Date(calY, calM, 1).getDay();
+    const daysIn = new Date(calY, calM + 1, 0).getDate();
+    const today = /* @__PURE__ */ new Date();
+    const isToday = (d) => calY === today.getFullYear() && calM === today.getMonth() && d === today.getDate();
+    let h = `<div class="cal-head"><button class="cal-nav" data-nav="-1" title="\uC774\uC804 \uB2EC">\u2039</button><span class="cal-title">${calY}\uB144 ${calM + 1}\uC6D4</span><button class="cal-nav" data-nav="1" title="\uB2E4\uC74C \uB2EC">\u203A</button></div><div class="cal-grid">`;
+    for (const w of WD_KR) h += `<div class="cal-wd ${w === "\uC77C" ? "sun" : w === "\uD1A0" ? "sat" : ""}">${w}</div>`;
+    for (let i = 0; i < startDow; i++) h += `<div class="cal-day empty"></div>`;
+    for (let d = 1; d <= daysIn; d++) {
+      const dow = (startDow + d - 1) % 7;
+      h += `<div class="cal-day${isToday(d) ? " today" : ""}${dow === 0 ? " sun" : dow === 6 ? " sat" : ""}" data-day="${d}" title="\uD074\uB9AD: \uB0A0\uC9DC \uC0BD\uC785 \xB7 \uC6B0\uD074\uB9AD: \uB370\uC77C\uB9AC \uB178\uD2B8">${d}</div>`;
+    }
+    h += `</div><div class="cal-foot"><button class="cal-today">\u{1F4C5} \uC624\uB298 \uC0BD\uC785</button><button class="cal-daily">\u{1F4D3} \uC624\uB298 \uB178\uD2B8</button></div>`;
+    calPopup.innerHTML = h;
+  }
+  async function openDailyNote(d) {
+    if (!state.vaults.length) {
+      toast("\uB370\uC77C\uB9AC \uB178\uD2B8\uB97C \uB9CC\uB4E4\uB824\uBA74 \uD3F4\uB354\uB97C \uBA3C\uC800 \uC5EC\uC138\uC694 (Ctrl+Shift+O)");
+      return;
+    }
+    const v0 = state.vaults[0];
+    const name = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const fp = v0.root + "\\\uB370\uC77C\uB9AC \uB178\uD2B8\\" + name + ".md";
+    const res = await window.api.ensureFile(fp, `# ${name} (${WD_KR[d.getDay()]})
+
+`);
+    if (!res || res.error) {
+      toast("\uB370\uC77C\uB9AC \uB178\uD2B8\uB97C \uB9CC\uB4E4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
+      return;
+    }
+    if (res.created) {
+      await refreshVault(v0);
+      toast(`\uB370\uC77C\uB9AC \uB178\uD2B8 \uC0DD\uC131: ${name}.md`);
+    }
+    await openPath(res.path);
+  }
+  function openCalendar(anchor) {
+    const now = /* @__PURE__ */ new Date();
+    if (calY == null) {
+      calY = now.getFullYear();
+      calM = now.getMonth();
+    }
+    renderCalendar();
+    calPopup.classList.remove("hidden");
+    const r = anchor.getBoundingClientRect();
+    calPopup.style.left = Math.min(r.left, window.innerWidth - 258) + "px";
+    calPopup.style.top = Math.min(r.bottom + 4, window.innerHeight - 300) + "px";
+  }
+  function closeCalendar() {
+    calPopup.classList.add("hidden");
+  }
+  calPopup.addEventListener("click", (e) => {
+    const nav = e.target.closest(".cal-nav");
+    if (nav) {
+      calM += +nav.dataset.nav;
+      if (calM < 0) {
+        calM = 11;
+        calY--;
+      } else if (calM > 11) {
+        calM = 0;
+        calY++;
+      }
+      renderCalendar();
+      return;
+    }
+    const day = e.target.closest(".cal-day[data-day]");
+    if (day) {
+      insertText(fmtDateTok(new Date(calY, calM, +day.dataset.day)));
+      closeCalendar();
+      return;
+    }
+    if (e.target.closest(".cal-today")) {
+      insertText(fmtDateTok(/* @__PURE__ */ new Date()));
+      closeCalendar();
+      return;
+    }
+    if (e.target.closest(".cal-daily")) {
+      openDailyNote(/* @__PURE__ */ new Date());
+      closeCalendar();
+    }
+  });
+  calPopup.addEventListener("contextmenu", (e) => {
+    const day = e.target.closest(".cal-day[data-day]");
+    if (!day) return;
+    e.preventDefault();
+    const d = new Date(calY, calM, +day.dataset.day);
+    showCtxMenu(e.clientX, e.clientY, [
+      { label: "\u{1F4D3} \uB370\uC77C\uB9AC \uB178\uD2B8 \uC5F4\uAE30/\uC0DD\uC131", action: () => {
+        openDailyNote(d);
+        closeCalendar();
+      } },
+      { label: "\u270F\uFE0F \uB0A0\uC9DC \uC0BD\uC785", action: () => {
+        insertText(fmtDateTok(d));
+        closeCalendar();
+      } }
+    ]);
+  });
+  $("#tb-calendar").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (calPopup.classList.contains("hidden")) openCalendar(e.currentTarget);
+    else closeCalendar();
+  });
+  window.addEventListener("mousedown", (e) => {
+    if (!e.target.closest("#calendar-popup") && !e.target.closest("#tb-calendar")) closeCalendar();
+  });
   var paletteOverlay = $("#palette-overlay");
   var paletteInput = $("#palette-input");
   var paletteListEl = $("#palette-list");
@@ -55293,6 +55598,7 @@ ${text}</tr>
     { name: "\uAC80\uC0C9 (\uD604\uC7AC \uD30C\uC77C)", kbd: "Ctrl+F", run: () => openSearch("current") },
     { name: "\uAC80\uC0C9 (\uD3F4\uB354 \uC804\uCCB4)", kbd: "Ctrl+Shift+F", run: () => openSearch("folder") },
     { name: "\uBC14\uAFB8\uAE30", kbd: "Ctrl+H", run: () => openSearch(null, true) },
+    { name: "\uC624\uB298 \uB370\uC77C\uB9AC \uB178\uD2B8", kbd: "", run: () => openDailyNote(/* @__PURE__ */ new Date()) },
     { name: "\uC0C8 \uD0ED", kbd: "", run: () => {
       const w = newTab({ content: "" });
       activateTab(w.id);
@@ -55319,9 +55625,41 @@ ${text}</tr>
   function closePalette() {
     paletteOverlay.classList.add("hidden");
   }
+  function fuzzyMatch(s, q) {
+    let i = 0;
+    for (const ch of s) {
+      if (ch === q[i]) i++;
+      if (i === q.length) return true;
+    }
+    return false;
+  }
+  function paletteEntries(q) {
+    const cmds = commands.filter((c) => c.name.toLowerCase().includes(q));
+    const scored = [];
+    if (state.vaults.length) {
+      for (const f of flattenVaultFiles()) {
+        const n = f.name.toLowerCase();
+        let sc = -1;
+        if (!q) sc = 0;
+        else if (n.startsWith(q)) sc = 4;
+        else if (n.includes(q)) sc = 3;
+        else if (fuzzyMatch(n, q)) sc = 2;
+        else if (f.path.toLowerCase().includes(q)) sc = 1;
+        if (sc >= 0) scored.push({ f, sc });
+      }
+      scored.sort((x, y) => y.sc - x.sc || x.f.name.localeCompare(y.f.name));
+    }
+    const files = scored.slice(0, q ? 30 : 8).map(({ f }) => ({
+      name: fileIcon(f.name) + " " + f.name,
+      kbd: f.path.replace(/[\\/][^\\/]*$/, "").replace(/^.*[\\/]/, ""),
+      // 상위 폴더명 힌트
+      run: () => openPath(f.path)
+    }));
+    return q ? [...files, ...cmds] : [...cmds, ...files];
+  }
   function renderPalette(q) {
     q = q.toLowerCase().trim();
-    palFiltered = commands.filter((c) => c.name.toLowerCase().includes(q));
+    palFiltered = paletteEntries(q);
     palSel = 0;
     paletteListEl.innerHTML = "";
     palFiltered.forEach((c, i) => {
@@ -55331,7 +55669,7 @@ ${text}</tr>
       a.textContent = c.name;
       const k = document.createElement("span");
       k.className = "kbd";
-      k.textContent = c.kbd;
+      k.textContent = c.kbd || "";
       li.append(a, k);
       li.addEventListener("click", () => {
         closePalette();
@@ -55712,9 +56050,10 @@ ${text}</tr>
     const matched = m[0];
     const single = buildRegexLocal(q);
     const replaced = matched.replace(single, replaceInput.value);
-    editor.value = val.slice(0, m.index) + replaced + val.slice(m.index + matched.length);
+    setValueKeepScroll(editor, val.slice(0, m.index) + replaced + val.slice(m.index + matched.length));
     editor.selectionStart = editor.selectionEnd = m.index + replaced.length;
     onEditorChanged();
+    scrollCaretIntoView();
     runSearch();
   }
   async function replaceAll() {
@@ -56192,11 +56531,11 @@ ${editRule}`;
   (function puppyEasterEgg() {
     const puppy = $("#puppy");
     if (!puppy) return;
-    let mode = 0, x = 0, dir = 1, t = 0;
+    let running = true, x = 0, dir = 1, t = 0;
     const MAX = 150, SPEED = 1.2;
     function frame() {
       t++;
-      if (mode === 0) {
+      if (running) {
         x += dir * SPEED;
         if (x >= MAX) {
           x = MAX;
@@ -56208,20 +56547,13 @@ ${editRule}`;
         const bob = -Math.abs(Math.sin(t * 0.32)) * 3;
         puppy.style.transform = `translate(${x.toFixed(1)}px, ${bob.toFixed(1)}px) scaleX(${dir})`;
       } else {
-        x += (0 - x) * 0.2;
-        if (x < 0.6) x = 0;
-        puppy.style.transform = `translate(${x.toFixed(1)}px, 0px)`;
+        puppy.style.transform = `translate(${x.toFixed(1)}px, 0px) scaleX(${dir})`;
       }
       requestAnimationFrame(frame);
     }
     puppy.addEventListener("click", () => {
-      mode = (mode + 1) % 3;
-      puppy.dataset.mode = String(mode);
-      puppy.classList.toggle("running", mode === 0);
-      if (mode === 0) {
-        x = 0;
-        dir = 1;
-      }
+      running = !running;
+      puppy.classList.toggle("running", running);
     });
     puppy.addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -56281,6 +56613,186 @@ ${text}
 `;
     claudeText.focus();
   });
+  window.api.onCtxInsertDate(() => {
+    insertText(fmtDateTok(/* @__PURE__ */ new Date()));
+  });
+  function forceCloseTab(id) {
+    const idx = state.tabs.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+    if (id === state.split2Id) closeSplit2();
+    state.tabs.splice(idx, 1);
+    if (state.activeId === id) {
+      if (state.tabs.length) activateTab(state.tabs[Math.max(0, idx - 1)].id);
+      else {
+        const w = newTab({ content: "" });
+        activateTab(w.id);
+      }
+    } else renderTabs();
+  }
+  function updateTabsForRename(oldPath, newPath, isDir) {
+    const oldLow = oldPath.toLowerCase();
+    for (const t of state.tabs) {
+      if (!t.filePath) continue;
+      const fpLow = t.filePath.toLowerCase();
+      if (isDir) {
+        if (fpLow.startsWith(oldLow + "\\") || fpLow.startsWith(oldLow + "/")) {
+          t.filePath = newPath + t.filePath.slice(oldPath.length);
+        }
+      } else if (fpLow === oldLow) {
+        t.filePath = newPath;
+        t.name = newPath.replace(/^.*[\\/]/, "");
+      }
+    }
+    const a = active();
+    if (a) {
+      statusPath.textContent = a.filePath || "";
+      setDocTitle(a.name);
+    }
+    renderTabs();
+  }
+  async function renameEntry(node, newName, labelSpan) {
+    const name = (newName || "").trim();
+    if (!name || name === node.name) {
+      renderVaults();
+      return;
+    }
+    if (/[\\/:*?"<>|]/.test(name)) {
+      toast('\uC774\uB984\uC5D0 \\ / : * ? " < > | \uB294 \uC4F8 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4');
+      renderVaults();
+      return;
+    }
+    const res = await window.api.renameFile(node.path, name);
+    if (!res || res.error) {
+      toast(res && res.error === "exists" ? "\uAC19\uC740 \uC774\uB984\uC774 \uC774\uBBF8 \uC788\uC2B5\uB2C8\uB2E4" : "\uC774\uB984 \uBCC0\uACBD \uC2E4\uD328");
+      renderVaults();
+      return;
+    }
+    updateTabsForRename(node.path, res.path, node.type === "dir");
+    for (const v of state.vaults) if (res.path.toLowerCase().startsWith(v.root.toLowerCase())) await refreshVault(v);
+    persist();
+    toast("\uC774\uB984\uC744 \uBCC0\uACBD\uD588\uC2B5\uB2C8\uB2E4");
+  }
+  function startTreeRename(node, labelSpan) {
+    if (!labelSpan || !labelSpan.parentNode) return;
+    const input = document.createElement("input");
+    input.className = "tree-rename";
+    input.value = node.name;
+    labelSpan.replaceWith(input);
+    input.focus();
+    const dot = node.name.lastIndexOf(".");
+    if (node.type === "file" && dot > 0) input.setSelectionRange(0, dot);
+    else input.select();
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      if (commit) renameEntry(node, input.value, labelSpan);
+      else renderVaults();
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("click", (e) => e.stopPropagation());
+  }
+  async function deleteEntry(node) {
+    const isDir = node.type === "dir";
+    if (!confirm(`"${node.name}"${isDir ? " \uD3F4\uB354 \uC804\uCCB4" : ""}\uC744(\uB97C) \uD734\uC9C0\uD1B5\uC73C\uB85C \uBCF4\uB0BC\uAE4C\uC694?`)) return;
+    const res = await window.api.trashItem(node.path);
+    if (!res || res.error) {
+      toast("\uC0AD\uC81C \uC2E4\uD328");
+      return;
+    }
+    const low = node.path.toLowerCase();
+    for (const t of [...state.tabs]) {
+      if (!t.filePath) continue;
+      const fp = t.filePath.toLowerCase();
+      if (fp === low || isDir && (fp.startsWith(low + "\\") || fp.startsWith(low + "/"))) forceCloseTab(t.id);
+    }
+    for (const v of state.vaults) if (node.path.toLowerCase().startsWith(v.root.toLowerCase())) await refreshVault(v);
+    persist();
+    toast("\uD734\uC9C0\uD1B5\uC73C\uB85C \uBCF4\uB0C8\uC2B5\uB2C8\uB2E4");
+  }
+  async function createNewFile(dirPath) {
+    const res = await window.api.createFile(dirPath);
+    if (!res || !res.path) {
+      toast("\uD30C\uC77C \uC0DD\uC131 \uC2E4\uD328");
+      return;
+    }
+    for (const v of state.vaults) if (res.path.toLowerCase().startsWith(v.root.toLowerCase())) await refreshVault(v);
+    await openPath(res.path);
+    revealInTree(res.path);
+  }
+  function showFileCtxMenu(x, y, node, labelSpan) {
+    showCtxMenu(x, y, [
+      { label: "\u{1F4C4} \uC5F4\uAE30", action: () => openPath(node.path) },
+      { label: "\u2B0C \uC624\uB978\uCABD\uC5D0 \uC5F4\uAE30", action: () => openSplit2ByPath(node.path) },
+      { label: "\u270F\uFE0F \uC774\uB984 \uBC14\uAFB8\uAE30", action: () => startTreeRename(node, labelSpan) },
+      { label: "\u{1F4CB} \uACBD\uB85C \uBCF5\uC0AC", action: () => {
+        window.api.copyText(node.path);
+        toast("\uACBD\uB85C\uB97C \uBCF5\uC0AC\uD588\uC2B5\uB2C8\uB2E4");
+      } },
+      { label: "\u{1F4C1} \uD0D0\uC0C9\uAE30\uC5D0\uC11C \uBCF4\uAE30", action: () => window.api.showItem(node.path) },
+      { label: "\u{1F5D1}\uFE0F \uC0AD\uC81C(\uD734\uC9C0\uD1B5)", action: () => deleteEntry(node) }
+    ]);
+  }
+  function showDirCtxMenu(x, y, node, labelSpan) {
+    showCtxMenu(x, y, [
+      { label: "\u{1F4C4} \uC0C8 \uD30C\uC77C", action: () => createNewFile(node.path) },
+      { label: "\u270F\uFE0F \uC774\uB984 \uBC14\uAFB8\uAE30", action: () => startTreeRename(node, labelSpan) },
+      { label: "\u{1F4C2} \uD0D0\uC0C9\uAE30\uC5D0\uC11C \uC5F4\uAE30", action: () => window.api.showItem(node.path) },
+      { label: "\u{1F5D1}\uFE0F \uC0AD\uC81C(\uD734\uC9C0\uD1B5)", action: () => deleteEntry(node) }
+    ]);
+  }
+  function closeOtherTabs(keepId) {
+    for (const t of [...state.tabs]) if (t.id !== keepId) closeTab(t.id);
+  }
+  function closeAllTabs() {
+    for (const t of [...state.tabs]) closeTab(t.id);
+  }
+  function renameTab(t) {
+    const el = tabbar.querySelector(`.tab[data-tab-id="${t.id}"]`);
+    const span = el && el.querySelector(".tname");
+    if (span) startRename(t, span);
+  }
+  async function deleteTabFile(t) {
+    if (!t.filePath) return;
+    if (!confirm(`"${t.name}" \uD30C\uC77C\uC744 \uD734\uC9C0\uD1B5\uC73C\uB85C \uBCF4\uB0BC\uAE4C\uC694?`)) return;
+    const res = await window.api.trashItem(t.filePath);
+    if (!res || res.error) {
+      toast("\uC0AD\uC81C \uC2E4\uD328");
+      return;
+    }
+    const p = t.filePath;
+    forceCloseTab(t.id);
+    for (const v of state.vaults) if (p.toLowerCase().startsWith(v.root.toLowerCase())) await refreshVault(v);
+    toast("\uD734\uC9C0\uD1B5\uC73C\uB85C \uBCF4\uB0C8\uC2B5\uB2C8\uB2E4");
+  }
+  function showTabCtxMenu(x, y, t) {
+    const items = [
+      { label: "\u2716 \uB2EB\uAE30", action: () => closeTab(t.id) },
+      { label: "\uB2E4\uB978 \uD0ED \uB2EB\uAE30", action: () => closeOtherTabs(t.id) },
+      { label: "\uBAA8\uB4E0 \uD0ED \uB2EB\uAE30", action: () => closeAllTabs() }
+    ];
+    if (state.tabs.length > 1) items.push({ label: "\u2B0C \uC624\uB978\uCABD\uC5D0 \uBD84\uD560", action: () => openSplit2(t.id) });
+    items.push({ label: "\u270F\uFE0F \uC774\uB984 \uBC14\uAFB8\uAE30", action: () => renameTab(t) });
+    if (t.filePath) {
+      items.push({ label: "\u{1F4CB} \uACBD\uB85C \uBCF5\uC0AC", action: () => {
+        window.api.copyText(t.filePath);
+        toast("\uACBD\uB85C\uB97C \uBCF5\uC0AC\uD588\uC2B5\uB2C8\uB2E4");
+      } });
+      items.push({ label: "\u{1F4C1} \uD0D0\uC0C9\uAE30\uC5D0\uC11C \uBCF4\uAE30", action: () => window.api.showItem(t.filePath) });
+      items.push({ label: "\u{1F5D1}\uFE0F \uD30C\uC77C \uC0AD\uC81C(\uD734\uC9C0\uD1B5)", action: () => deleteTabFile(t) });
+    }
+    showCtxMenu(x, y, items);
+  }
   var editor2 = $("#editor2");
   var hl2 = $("#editor2-highlight");
   var gutter2 = $("#gutter2");
@@ -56470,10 +56982,44 @@ ${text}
       e.preventDefault();
       const s = editor2.selectionStart, en = editor2.selectionEnd;
       const v = editor2.value;
-      editor2.value = v.slice(0, s) + "    " + v.slice(en);
+      setValueKeepScroll(editor2, v.slice(0, s) + "    " + v.slice(en));
       editor2.selectionStart = editor2.selectionEnd = s + 4;
       onEditor2Changed();
     }
+  });
+  async function handleImagePaste(e, ed) {
+    const cd = e.clipboardData;
+    if (!cd || (cd.getData("text/plain") || "").length) return;
+    let img = null;
+    for (const it of cd.items) if (it.kind === "file" && it.type.startsWith("image/")) {
+      img = it;
+      break;
+    }
+    if (!img) return;
+    e.preventDefault();
+    const t = ed === editor2 ? split2Tab() : active();
+    if (!t || !t.filePath) {
+      toast("\uC774\uBBF8\uC9C0\uB97C \uB123\uC73C\uB824\uBA74 \uB178\uD2B8\uB97C \uBA3C\uC800 \uD30C\uC77C\uB85C \uC800\uC7A5\uD558\uC138\uC694 (Ctrl+S)");
+      return;
+    }
+    const file = img.getAsFile();
+    if (!file) return;
+    const data = new Uint8Array(await file.arrayBuffer());
+    const ext = (img.type.split("/")[1] || "png").replace("jpeg", "jpg").replace("svg+xml", "svg");
+    const dir = t.filePath.replace(/[\\/][^\\/]*$/, "");
+    const res = await window.api.savePastedImage(dir, data, ext);
+    if (!res || res.error) {
+      toast("\uC774\uBBF8\uC9C0 \uC800\uC7A5 \uC2E4\uD328");
+      return;
+    }
+    insertText(`![](${res.rel})`);
+    toast(`\uC774\uBBF8\uC9C0 \uC800\uC7A5: ${res.rel}`);
+  }
+  editor.addEventListener("paste", (e) => {
+    handleImagePaste(e, editor);
+  });
+  editor2.addEventListener("paste", (e) => {
+    handleImagePaste(e, editor2);
   });
   var splitHint = $("#split-drop-hint");
   function showSplitHint(on) {

@@ -64,19 +64,27 @@ function createWindow() {
       menu.append(new MenuItem({ type: 'separator' }));
     }
     const ef = params.editFlags || {};
+    const fmt = (label, f) => menu.append(new MenuItem({ label, click: () => wc.send('ctx-format', f) }));
+    const sep = () => menu.append(new MenuItem({ type: 'separator' }));
     if (params.isEditable) {
       menu.append(new MenuItem({ label: '잘라내기', role: 'cut', enabled: ef.canCut }));
       menu.append(new MenuItem({ label: '복사', role: 'copy', enabled: ef.canCopy }));
       menu.append(new MenuItem({ label: '붙여넣기', role: 'paste', enabled: ef.canPaste }));
       menu.append(new MenuItem({ label: '전체 선택', role: 'selectAll' }));
       if (params.selectionText) {
-        menu.append(new MenuItem({ type: 'separator' }));
-        menu.append(new MenuItem({ label: '굵게 **', click: () => wc.send('ctx-format', 'bold') }));
-        menu.append(new MenuItem({ label: '기울임 *', click: () => wc.send('ctx-format', 'italic') }));
-        menu.append(new MenuItem({ label: '인라인 코드 `', click: () => wc.send('ctx-format', 'code') }));
-        menu.append(new MenuItem({ label: '링크', click: () => wc.send('ctx-format', 'link') }));
-        menu.append(new MenuItem({ type: 'separator' }));
+        // 드래그(선택)한 상태 → 선택 텍스트에 서식 적용
+        sep();
+        fmt('굵게 **', 'bold'); fmt('기울임 *', 'italic'); fmt('취소선 ~~', 'strike');
+        fmt('인라인 코드 `', 'code'); fmt('링크', 'link');
+        sep();
+        fmt('인용 >', 'quote'); fmt('목록', 'ul'); fmt('체크박스 ☑', 'task');
+        sep();
         menu.append(new MenuItem({ label: 'Claude에게 보내기', click: () => wc.send('ctx-claude', params.selectionText) }));
+      } else {
+        // 선택 없이 그냥 우클릭 → 삽입 도구
+        sep();
+        menu.append(new MenuItem({ label: '📅 오늘 날짜 삽입', click: () => wc.send('ctx-insert-date') }));
+        fmt('▦ 표 삽입', 'table'); fmt('― 구분선 삽입', 'hr'); fmt('{ } 코드 블록', 'codeblock');
       }
     } else if (params.selectionText) {
       menu.append(new MenuItem({ label: '복사', role: 'copy' }));
@@ -226,6 +234,67 @@ ipcMain.handle('fs:rename', async (_e, { oldPath, newName }) => {
     if (fs.existsSync(newPath)) return { error: 'exists' };
     await fsp.rename(oldPath, newPath);
     return { ok: true, path: newPath };
+  } catch (e) { return { error: e.message }; }
+});
+
+// 휴지통으로 보내기 (파일/폴더)
+ipcMain.handle('shell:trash', async (_e, p) => {
+  try { await shell.trashItem(p); return { ok: true }; }
+  catch (e) { return { error: e.message }; }
+});
+
+// OS 파일 탐색기에서 위치 열기
+ipcMain.handle('shell:showItem', async (_e, p) => {
+  try { shell.showItemInFolder(p); return true; } catch { return false; }
+});
+
+// 새 파일 만들기 (해당 폴더에 고유 이름으로 빈 .md 생성)
+ipcMain.handle('fs:createFile', async (_e, dir) => {
+  try {
+    const base = '제목 없음', ext = '.md';
+    let name = base + ext, i = 1;
+    while (fs.existsSync(path.join(dir, name))) name = `${base} ${i++}${ext}`;
+    const full = path.join(dir, name);
+    await fsp.writeFile(full, '', 'utf-8');
+    return { path: full };
+  } catch (e) { return { error: e.message }; }
+});
+
+// 새 폴더 만들기 (해당 폴더에 고유 이름으로 생성)
+ipcMain.handle('fs:createFolder', async (_e, dir) => {
+  try {
+    const base = '새 폴더';
+    let name = base, i = 1;
+    while (fs.existsSync(path.join(dir, name))) name = `${base} ${i++}`;
+    const full = path.join(dir, name);
+    await fsp.mkdir(full);
+    return { path: full };
+  } catch (e) { return { error: e.message }; }
+});
+
+// 파일이 없으면 상위 폴더까지 만들어 생성 (데일리 노트). 이미 있으면 그대로 반환
+ipcMain.handle('fs:ensureFile', async (_e, { filePath, content }) => {
+  try {
+    if (fs.existsSync(filePath)) return { path: filePath, created: false };
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    await fsp.writeFile(filePath, content || '', 'utf-8');
+    return { path: filePath, created: true };
+  } catch (e) { return { error: e.message }; }
+});
+
+// 붙여넣은 이미지를 노트 폴더의 "첨부" 하위 폴더에 저장 → 상대경로 반환
+ipcMain.handle('fs:savePastedImage', async (_e, { dir, data, ext }) => {
+  try {
+    const sub = path.join(dir, '첨부');
+    await fsp.mkdir(sub, { recursive: true });
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+    const safeExt = /^[a-z0-9]{1,5}$/.test(ext) ? ext : 'png';
+    let name = `img-${stamp}.${safeExt}`, i = 1;
+    while (fs.existsSync(path.join(sub, name))) name = `img-${stamp}-${i++}.${safeExt}`;
+    await fsp.writeFile(path.join(sub, name), Buffer.from(data));
+    return { rel: '첨부/' + name, path: path.join(sub, name) };
   } catch (e) { return { error: e.message }; }
 });
 

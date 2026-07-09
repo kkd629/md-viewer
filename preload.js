@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('api', {
   openImage: () => ipcRenderer.invoke('dialog:openImage'),
   onCtxFormat: (cb) => ipcRenderer.on('ctx-format', (_e, fmt) => cb(fmt)),
   onCtxClaude: (cb) => ipcRenderer.on('ctx-claude', (_e, text) => cb(text)),
+  onCtxInsertDate: (cb) => ipcRenderer.on('ctx-insert-date', () => cb()),
   saveFileAs: (content, defaultPath) =>
     ipcRenderer.invoke('dialog:saveFile', { content, defaultPath }),
   readFile: (filePath) => ipcRenderer.invoke('fs:read', filePath),
@@ -16,6 +17,12 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('fs:write', { filePath, content }),
   renameFile: (oldPath, newName) =>
     ipcRenderer.invoke('fs:rename', { oldPath, newName }),
+  trashItem: (p) => ipcRenderer.invoke('shell:trash', p),
+  showItem: (p) => ipcRenderer.invoke('shell:showItem', p),
+  createFile: (dir) => ipcRenderer.invoke('fs:createFile', dir),
+  createFolder: (dir) => ipcRenderer.invoke('fs:createFolder', dir),
+  ensureFile: (filePath, content) => ipcRenderer.invoke('fs:ensureFile', { filePath, content }),
+  savePastedImage: (dir, data, ext) => ipcRenderer.invoke('fs:savePastedImage', { dir, data, ext }),
   readTree: (root) => ipcRenderer.invoke('fs:tree', root),
   watchFolder: (root) => ipcRenderer.send('fs:watch', root),
   unwatchFolder: (root) => ipcRenderer.send('fs:unwatch', root),

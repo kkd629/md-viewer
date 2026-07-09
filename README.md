@@ -4,14 +4,18 @@
 
 <img width="1918" height="1030" alt="image" src="https://github.com/user-attachments/assets/64237faf-5ea0-4514-bb93-8c786d764c67" />
 
-## 다운로드
+## 다운로드 (그냥 쓰실 분)
 
-[**Releases**](../../releases) 에서 최신 `MD Viewer Setup.exe` 를 받아 실행하면 설치됩니다
+[**Releases**](../../releases) 에서 최신 **`MD Viewer Setup.exe`** 를 받아 실행하면 설치됩니다
 (관리자 권한 불필요, 바탕화면·시작메뉴 바로가기 생성). 제어판에서 깔끔하게 제거할 수 있습니다.
 
-## 실행 방법
+> ⚠️ 초록색 **Code ▸ Download ZIP**(소스 코드)로 받으면 실행되지 않습니다. 그건 개발용 소스라
+> `node_modules`(라이브러리)가 없어서 그대로는 안 돌아갑니다. **그냥 쓰실 거면 위 Setup.exe** 를 받으세요.
 
-가장 간단: **`MD Viewer 실행.bat`** 더블클릭
+## 실행 방법 (소스에서 개발/실행)
+
+**`MD Viewer 실행.bat`** 더블클릭 — 소스로 받았다면 처음 실행 시 자동으로 `npm install` +
+빌드를 수행합니다(**[Node.js](https://nodejs.org) 필요**). 이후엔 바로 실행됩니다.
 
 또는 터미널에서:
 

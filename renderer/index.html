@@ -133,6 +133,8 @@
         <button data-fmt="link" title="링크">🔗 링크</button>
         <button data-fmt="table" title="표">▦ 표</button>
         <button data-fmt="hr" title="구분선">―</button>
+        <span class="tb-sep"></span>
+        <button id="tb-calendar" title="날짜 삽입 (달력)">📅 날짜</button>
       </div>
 
       <!-- 패널 -->
@@ -207,8 +209,8 @@
     </aside>
   </div>
 
-  <!-- 강아지 이스터에그: 클릭 → 말티즈(달리기) → 깨댕이(춤) → 깨댕이(멈춤) 순환 -->
-  <div id="puppy" class="running" data-mode="0" title="강아지 — 클릭: 말티즈→깨댕이춤→깨댕이멈춤">
+  <!-- 강아지 이스터에그: 클릭 → 달리기 ↔ 멈춤 -->
+  <div id="puppy" class="running" title="강아지 — 클릭하면 달리기/멈춤">
     <!-- 말티즈 (옆모습, 달리기) -->
     <svg class="dog dog-maltese" viewBox="0 0 64 50" xmlns="http://www.w3.org/2000/svg">
       <circle cx="9" cy="24" r="7" fill="#ffffff"/>
@@ -229,23 +231,6 @@
       <circle cx="61" cy="24" r="2.4" fill="#3a3a3a"/>
       <path d="M57 28 q3 3 6 1" stroke="#c9ccd1" stroke-width="1.2" fill="none"/>
     </svg>
-    <!-- 깨댕이 (앞모습, 춤) -->
-    <svg class="dog dog-kkae" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
-      <ellipse cx="15" cy="20" rx="7" ry="12" fill="#d9a85f" transform="rotate(-22 15 20)"/>
-      <ellipse cx="45" cy="20" rx="7" ry="12" fill="#d9a85f" transform="rotate(22 45 20)"/>
-      <ellipse cx="30" cy="45" rx="15" ry="13" fill="#f6e7c1"/>
-      <ellipse cx="19" cy="41" rx="4" ry="6.5" fill="#f6e7c1" transform="rotate(28 19 41)"/>
-      <ellipse cx="41" cy="41" rx="4" ry="6.5" fill="#f6e7c1" transform="rotate(-28 41 41)"/>
-      <circle cx="30" cy="24" r="16" fill="#f6e7c1"/>
-      <ellipse cx="16" cy="19" rx="3.4" ry="6" fill="#b9854a" transform="rotate(-22 16 19)"/>
-      <ellipse cx="44" cy="19" rx="3.4" ry="6" fill="#b9854a" transform="rotate(22 44 19)"/>
-      <circle cx="20" cy="29" r="3" fill="#ffb3c1"/>
-      <circle cx="40" cy="29" r="3" fill="#ffb3c1"/>
-      <circle cx="24" cy="23" r="2.4" fill="#3a2b1a"/>
-      <circle cx="36" cy="23" r="2.4" fill="#3a2b1a"/>
-      <ellipse cx="30" cy="29" rx="2.5" ry="1.9" fill="#3a2b1a"/>
-      <path d="M28 31 q2 4 4 0 z" fill="#ff7a90"/>
-    </svg>
     <!-- 사용자 지정 이미지/움짤 (우클릭으로 설정) -->
     <img class="dog dog-custom" id="puppy-custom" alt="" />
   </div>
@@ -253,10 +238,13 @@
   <!-- 미니 컨텍스트 메뉴 (강아지 우클릭 등) -->
   <div id="ctxmenu" class="hidden"></div>
 
+  <!-- 날짜 삽입 달력 팝업 -->
+  <div id="calendar-popup" class="hidden"></div>
+
   <!-- 커맨드 팔레트 -->
   <div id="palette-overlay" class="hidden">
     <div id="palette">
-      <input id="palette-input" type="text" placeholder="명령 입력... (예: 분할, 저장, 설정)" />
+      <input id="palette-input" type="text" placeholder="파일 이름 또는 명령 검색… (예: 회의록, 분할, 저장)" />
       <ul id="palette-list"></ul>
     </div>
   </div>
