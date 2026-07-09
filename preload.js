@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   getPathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   openFile: () => ipcRenderer.invoke('dialog:openFile'),
   openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
-  openImage: () => ipcRenderer.invoke('dialog:openImage'),
+  confirmBox: (message, detail) => ipcRenderer.invoke('dialog:confirm', { message, detail }),
   onCtxFormat: (cb) => ipcRenderer.on('ctx-format', (_e, fmt) => cb(fmt)),
   onCtxClaude: (cb) => ipcRenderer.on('ctx-claude', (_e, text) => cb(text)),
   onCtxInsertDate: (cb) => ipcRenderer.on('ctx-insert-date', () => cb()),

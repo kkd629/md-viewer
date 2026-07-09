@@ -135,6 +135,17 @@ ipcMain.on('win:maxtoggle', () => {
 });
 ipcMain.on('win:close', () => { if (mainWindow) mainWindow.close(); });
 
+/* ----------------------- IPC: 확인 대화상자 ----------------------- */
+// window.confirm/alert 는 Electron(프레임리스)에서 닫힌 뒤 입력 포커스가 죽는(먹통) 버그가 있어
+// 네이티브 메시지 박스로 대체한다.
+ipcMain.handle('dialog:confirm', async (_e, { message, detail }) => {
+  const r = await dialog.showMessageBox(mainWindow, {
+    type: 'question', buttons: ['확인', '취소'], defaultId: 0, cancelId: 1, noLink: true,
+    message, detail: detail || undefined
+  });
+  return r.response === 0;
+});
+
 /* ----------------------- IPC: 파일 시스템 ----------------------- */
 
 // 파일 열기 다이얼로그
@@ -150,16 +161,6 @@ ipcMain.handle('dialog:openFile', async () => {
   const filePath = res.filePaths[0];
   const content = await fsp.readFile(filePath, 'utf-8');
   return { filePath, content };
-});
-
-// 이미지 선택 다이얼로그 (깨댕이 교체용) — file:// 경로 반환
-ipcMain.handle('dialog:openImage', async () => {
-  const res = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile'],
-    filters: [{ name: '이미지/움짤', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'apng', 'bmp', 'svg'] }]
-  });
-  if (res.canceled || !res.filePaths.length) return null;
-  return 'file:///' + res.filePaths[0].replace(/\\/g, '/');
 });
 
 // 폴더(Vault) 열기 다이얼로그

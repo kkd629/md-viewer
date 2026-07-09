@@ -54042,7 +54042,7 @@ ${text}</tr>
     split2Id: null,
     // 보조 편집기에 표시된 탭 id(두 파일 분할 편집)
     lineMap: [],
-    settings: { theme: "dark", fontSize: 14, autoSave: false, syntax: true, lineSpacing: 1.5, spellcheck: false, splitHoriz: false, puppyImage: "" },
+    settings: { theme: "dark", fontSize: 14, autoSave: false, syntax: true, lineSpacing: 1.5, spellcheck: false, splitHoriz: false, dailyDir: "" },
     search: { scope: "current", caseSensitive: false, regex: false, flat: [], cursor: -1, lastGroups: [] }
   };
   var active = () => state.tabs.find((t) => t.id === state.activeId);
@@ -54243,7 +54243,7 @@ ${text}</tr>
     if (m = /^(#{1,6})(\s.*)?$/.exec(body))
       return `${pre}<span class="t-heading"><span class="t-mark">${m[1]}</span>${hlInline(escHtml(m[2] || ""))}</span>`;
     if (/^>/.test(body)) return `${pre}<span class="t-quote">${hlInline(escHtml(body))}</span>`;
-    if ((m = /^([-*+]|\d+\.)(\s.*)?$/.exec(body)) && /^([-*+]|\d+\.)\s/.test(body))
+    if ((m = /^([-*+□○·]|\d+\.)(\s.*)?$/.exec(body)) && /^([-*+□○·]|\d+\.)\s/.test(body))
       return `${pre}<span class="t-listmark">${escHtml(m[1])}</span>${hlInline(escHtml(m[2] || ""))}`;
     if (/^([-*_])(\s*\1){2,}\s*$/.test(body)) return `${pre}<span class="t-hr">${escHtml(body)}</span>`;
     return pre + hlInline(escHtml(body));
@@ -54665,7 +54665,7 @@ ${text}</tr>
       const lineStart = v.lastIndexOf("\n", s - 1) + 1;
       const line = v.slice(lineStart, s);
       const indent = (line.match(/^[ \t]*/) || [""])[0];
-      const lm = line.match(/^([ \t]*)([-*+]\s(?:\[[ xX]\]\s)?|\d+\.\s)(.*)$/);
+      const lm = line.match(/^([ \t]*)([-*+□○·]\s(?:\[[ xX]\]\s)?|\d+\.\s)(.*)$/);
       if (lm && lm[3].trim() === "") {
         e.preventDefault();
         editSet(v.slice(0, lineStart) + v.slice(s), lineStart);
@@ -54785,11 +54785,12 @@ ${text}</tr>
     updateUndoButtons();
     persist();
   }
-  function closeTab(id) {
-    const idx = state.tabs.findIndex((t2) => t2.id === id);
+  async function closeTab(id) {
+    let t = state.tabs.find((x) => x.id === id);
+    if (!t) return;
+    if (t.dirty && !await window.api.confirmBox(`"${t.name}" \uC758 \uBCC0\uACBD \uC0AC\uD56D\uC774 \uC800\uC7A5\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uB2EB\uC744\uAE4C\uC694?`)) return;
+    const idx = state.tabs.findIndex((x) => x.id === id);
     if (idx < 0) return;
-    const t = state.tabs[idx];
-    if (t.dirty && !confirm(`"${t.name}" \uC758 \uBCC0\uACBD \uC0AC\uD56D\uC774 \uC800\uC7A5\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uB2EB\uC744\uAE4C\uC694?`)) return;
     if (id === state.split2Id) closeSplit2();
     state.tabs.splice(idx, 1);
     if (state.activeId === id) {
@@ -54989,7 +54990,7 @@ ${text}</tr>
       openInTab(filePath, content);
       revealInTree(filePath);
     } catch {
-      alert("\uD30C\uC77C\uC744 \uC5F4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4: " + filePath);
+      toast("\uD30C\uC77C\uC744 \uC5F4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4: " + filePath.replace(/^.*[\\/]/, ""));
     }
   }
   function openInTab(filePath, content) {
@@ -55294,14 +55295,14 @@ ${text}</tr>
     if (wiki) {
       e.preventDefault();
       if (!state.vaults.length) {
-        alert("\uC704\uD0A4\uB9C1\uD06C\uB97C \uB530\uB77C\uAC00\uB824\uBA74 \uD3F4\uB354\uB97C \uBA3C\uC800 \uC5EC\uC138\uC694.");
+        toast("\uC704\uD0A4\uB9C1\uD06C\uB97C \uB530\uB77C\uAC00\uB824\uBA74 \uD3F4\uB354\uB97C \uBA3C\uC800 \uC5EC\uC138\uC694");
         return;
       }
       for (const v of state.vaults) {
         const resolved = await window.api.resolveWiki(v.root, wiki.dataset.wiki);
         if (resolved) return openPath(resolved);
       }
-      alert(`"${wiki.dataset.wiki}" \uB178\uD2B8\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.`);
+      toast(`"${wiki.dataset.wiki}" \uB178\uD2B8\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4`);
       return;
     }
     const a = e.target.closest("a[href]");
@@ -55448,6 +55449,26 @@ ${text}</tr>
       case "hr":
         insert("\n---\n");
         break;
+      case "bullets": {
+        const BULL = ["\u25A1", "\u25CB", "-", "\xB7"];
+        const ls = val.lastIndexOf("\n", s - 1) + 1;
+        let le = val.indexOf("\n", en);
+        if (le < 0) le = val.length;
+        const lines = val.slice(ls, le).split("\n");
+        const parse = (l) => l.match(/^(\s*)(?:([□○·-])\s+)?(.*)$/);
+        const cur = parse(lines[0])[2] || null;
+        const ci = cur ? BULL.indexOf(cur) : -1;
+        const next = ci < 0 ? BULL[0] : ci === BULL.length - 1 ? null : BULL[ci + 1];
+        const out = lines.map((l) => {
+          const m = parse(l);
+          return m[1] + (next ? next + " " : "") + m[3];
+        });
+        const nb = out.join("\n");
+        setValueKeepScroll(editor, val.slice(0, ls) + nb + val.slice(le));
+        editor.selectionStart = Math.max(ls, s + (out[0].length - lines[0].length));
+        editor.selectionEnd = Math.max(ls, en + (nb.length - (le - ls)));
+        break;
+      }
     }
     onEditorChanged();
     scrollCaretIntoView();
@@ -55499,14 +55520,17 @@ ${text}</tr>
     calPopup.innerHTML = h;
   }
   async function openDailyNote(d) {
-    if (!state.vaults.length) {
-      toast("\uB370\uC77C\uB9AC \uB178\uD2B8\uB97C \uB9CC\uB4E4\uB824\uBA74 \uD3F4\uB354\uB97C \uBA3C\uC800 \uC5EC\uC138\uC694 (Ctrl+Shift+O)");
-      return;
+    let dir = state.settings.dailyDir;
+    if (!dir) {
+      if (!state.vaults.length) {
+        toast("\uC124\uC815\uC5D0\uC11C \uB370\uC77C\uB9AC \uB178\uD2B8 \uD3F4\uB354\uB97C \uC9C0\uC815\uD558\uAC70\uB098, \uD3F4\uB354\uB97C \uBA3C\uC800 \uC5EC\uC138\uC694");
+        openSettings();
+        return;
+      }
+      dir = state.vaults[0].root + "\\\uB370\uC77C\uB9AC \uB178\uD2B8";
     }
-    const v0 = state.vaults[0];
     const name = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-    const fp = v0.root + "\\\uB370\uC77C\uB9AC \uB178\uD2B8\\" + name + ".md";
-    const res = await window.api.ensureFile(fp, `# ${name} (${WD_KR[d.getDay()]})
+    const res = await window.api.ensureFile(dir + "\\" + name + ".md", `# ${name} (${WD_KR[d.getDay()]})
 
 `);
     if (!res || res.error) {
@@ -55514,10 +55538,11 @@ ${text}</tr>
       return;
     }
     if (res.created) {
-      await refreshVault(v0);
       toast(`\uB370\uC77C\uB9AC \uB178\uD2B8 \uC0DD\uC131: ${name}.md`);
+      const v = state.vaults.find((x) => res.path.toLowerCase().startsWith(x.root.toLowerCase()));
+      if (v) await refreshVault(v);
     }
-    await openPath(res.path);
+    await openExternalFile(res.path);
   }
   function openCalendar(anchor) {
     const now = /* @__PURE__ */ new Date();
@@ -55587,6 +55612,71 @@ ${text}</tr>
   });
   window.addEventListener("mousedown", (e) => {
     if (!e.target.closest("#calendar-popup") && !e.target.closest("#tb-calendar")) closeCalendar();
+  });
+  var tablePicker = $("#table-picker");
+  var TP_COLS = 8;
+  var TP_ROWS = 6;
+  function buildTablePicker() {
+    let h = '<div class="tp-label"><b id="tp-size">1\uC5F4 \xD7 1\uD589</b></div><div class="tp-grid">';
+    for (let r = 1; r <= TP_ROWS; r++)
+      for (let c = 1; c <= TP_COLS; c++)
+        h += `<div class="tp-cell" data-r="${r}" data-c="${c}"></div>`;
+    h += '</div><div class="tp-hint">\uCCAB \uD589\uC740 \uC81C\uBAA9 \uD589\uC774 \uB429\uB2C8\uB2E4</div>';
+    tablePicker.innerHTML = h;
+  }
+  function tpHighlight(r, c) {
+    tablePicker.querySelectorAll(".tp-cell").forEach((el) => {
+      el.classList.toggle("on", +el.dataset.r <= r && +el.dataset.c <= c);
+    });
+    const lb = $("#tp-size");
+    if (lb) lb.textContent = `${c}\uC5F4 \xD7 ${r}\uD589`;
+  }
+  function openTablePicker(anchor) {
+    buildTablePicker();
+    tpHighlight(1, 1);
+    tablePicker.classList.remove("hidden");
+    const rct = anchor.getBoundingClientRect();
+    tablePicker.style.left = Math.min(rct.left, window.innerWidth - 240) + "px";
+    tablePicker.style.top = Math.min(rct.bottom + 4, window.innerHeight - 260) + "px";
+  }
+  function closeTablePicker() {
+    tablePicker.classList.add("hidden");
+  }
+  function insertTableAt(rows, cols) {
+    editor.focus();
+    const s = editor.selectionStart, v = editor.value;
+    const lineStart = v.lastIndexOf("\n", s - 1) + 1;
+    const needNL = v.slice(lineStart, s).trim().length > 0;
+    const head = "| " + Array.from({ length: cols }, (_, i) => `\uC81C\uBAA9${i + 1}`).join(" | ") + " |";
+    const sep = "|" + Array(cols).fill("-------").join("|") + "|";
+    const bodyRows = Math.max(1, rows - 1);
+    const body = Array.from({ length: bodyRows }, () => "|" + Array(cols).fill("       ").join("|") + "|").join("\n");
+    const block2 = (needNL ? "\n" : "") + head + "\n" + sep + "\n" + body + "\n";
+    setValueKeepScroll(editor, v.slice(0, s) + block2 + v.slice(editor.selectionEnd));
+    const cellStart = s + (needNL ? 1 : 0) + 2;
+    editor.selectionStart = cellStart;
+    editor.selectionEnd = cellStart + "\uC81C\uBAA91".length;
+    onEditorChanged();
+    scrollCaretIntoView();
+  }
+  tablePicker.addEventListener("mousemove", (e) => {
+    const cell = e.target.closest(".tp-cell");
+    if (cell) tpHighlight(+cell.dataset.r, +cell.dataset.c);
+  });
+  tablePicker.addEventListener("click", (e) => {
+    const cell = e.target.closest(".tp-cell");
+    if (cell) {
+      insertTableAt(+cell.dataset.r, +cell.dataset.c);
+      closeTablePicker();
+    }
+  });
+  $("#tb-table").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (tablePicker.classList.contains("hidden")) openTablePicker(e.currentTarget);
+    else closeTablePicker();
+  });
+  window.addEventListener("mousedown", (e) => {
+    if (!e.target.closest("#table-picker") && !e.target.closest("#tb-table")) closeTablePicker();
   });
   var paletteOverlay = $("#palette-overlay");
   var paletteInput = $("#palette-input");
@@ -55762,24 +55852,13 @@ ${text}</tr>
       $("#linespacing-val").textContent = s.lineSpacing.toFixed(2);
     }
     if ($("#set-spellcheck")) $("#set-spellcheck").checked = !!s.spellcheck;
-    applyPuppyImage();
+    const dv = $("#dailydir-val");
+    if (dv) dv.textContent = s.dailyDir || '(\uBBF8\uC9C0\uC815 \u2014 \uCCAB \uBC88\uC9F8 \uD3F4\uB354\uC758 "\uB370\uC77C\uB9AC \uB178\uD2B8")';
     applyHighlight();
     syncHighlightScroll();
     if (state.split2Id) {
       applyHighlight2();
       syncHighlight2Scroll();
-    }
-  }
-  function applyPuppyImage() {
-    const puppy = $("#puppy");
-    const img = $("#puppy-custom");
-    if (!puppy || !img) return;
-    if (state.settings.puppyImage) {
-      img.src = state.settings.puppyImage;
-      puppy.classList.add("custom");
-    } else {
-      puppy.classList.remove("custom");
-      img.removeAttribute("src");
     }
   }
   function zoom(d) {
@@ -55808,6 +55887,20 @@ ${text}</tr>
   });
   $("#set-spellcheck").addEventListener("change", (e) => {
     state.settings.spellcheck = e.target.checked;
+    applySettings();
+    persist();
+  });
+  $("#set-dailydir").addEventListener("click", async () => {
+    const r = await window.api.openFolder();
+    if (r) {
+      state.settings.dailyDir = r;
+      applySettings();
+      persist();
+      toast("\uB370\uC77C\uB9AC \uB178\uD2B8 \uD3F4\uB354\uB97C \uC9C0\uC815\uD588\uC2B5\uB2C8\uB2E4");
+    }
+  });
+  $("#set-dailydir-clear").addEventListener("click", () => {
+    state.settings.dailyDir = "";
     applySettings();
     persist();
   });
@@ -56065,7 +56158,7 @@ ${text}</tr>
     if (scope === "folder") {
       const paths = (state.search.lastGroups || []).map((g) => g.path).filter(Boolean);
       if (!paths.length) return;
-      if (!confirm(`\uD3F4\uB354 \uB0B4 ${paths.length}\uAC1C \uD30C\uC77C\uC5D0\uC11C \uBAA8\uB450 \uBC14\uAFC9\uB2C8\uB2E4. \uACC4\uC18D\uD560\uAE4C\uC694?`)) return;
+      if (!await window.api.confirmBox(`\uD3F4\uB354 \uB0B4 ${paths.length}\uAC1C \uD30C\uC77C\uC5D0\uC11C \uBAA8\uB450 \uBC14\uAFC9\uB2C8\uB2E4. \uACC4\uC18D\uD560\uAE4C\uC694?`)) return;
       const r = await window.api.replaceFiles({ paths, query: q, replacement: rep, caseSensitive: state.search.caseSensitive, regex: state.search.regex });
       for (const t of state.tabs) {
         if (t.filePath && paths.includes(t.filePath)) {
@@ -56528,56 +56621,6 @@ ${editRule}`;
     e.preventDefault();
     zoom(e.deltaY < 0 ? 1 : -1);
   }, { passive: false });
-  (function puppyEasterEgg() {
-    const puppy = $("#puppy");
-    if (!puppy) return;
-    let running = true, x = 0, dir = 1, t = 0;
-    const MAX = 150, SPEED = 1.2;
-    function frame() {
-      t++;
-      if (running) {
-        x += dir * SPEED;
-        if (x >= MAX) {
-          x = MAX;
-          dir = -1;
-        } else if (x <= 0) {
-          x = 0;
-          dir = 1;
-        }
-        const bob = -Math.abs(Math.sin(t * 0.32)) * 3;
-        puppy.style.transform = `translate(${x.toFixed(1)}px, ${bob.toFixed(1)}px) scaleX(${dir})`;
-      } else {
-        puppy.style.transform = `translate(${x.toFixed(1)}px, 0px) scaleX(${dir})`;
-      }
-      requestAnimationFrame(frame);
-    }
-    puppy.addEventListener("click", () => {
-      running = !running;
-      puppy.classList.toggle("running", running);
-    });
-    puppy.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      showCtxMenu(e.clientX, e.clientY, [
-        { label: "\u{1F5BC} \uC774\uBBF8\uC9C0/\uC6C0\uC9E4 \uB123\uAE30\u2026", action: async () => {
-          const u = await window.api.openImage();
-          if (u) {
-            state.settings.puppyImage = u;
-            applyPuppyImage();
-            persist();
-            toast("\uAC15\uC544\uC9C0 \uC774\uBBF8\uC9C0\uB97C \uBC14\uAFE8\uC2B5\uB2C8\uB2E4");
-          }
-        } },
-        { label: "\u{1F436} \uAE30\uBCF8 \uAC15\uC544\uC9C0\uB85C", action: () => {
-          state.settings.puppyImage = "";
-          applyPuppyImage();
-          persist();
-          toast("\uAE30\uBCF8 \uAC15\uC544\uC9C0\uB85C \uB418\uB3CC\uB838\uC2B5\uB2C8\uB2E4");
-        } }
-      ]);
-    });
-    frame();
-  })();
   function showCtxMenu(x, y, items) {
     const el = $("#ctxmenu");
     el.innerHTML = "";
@@ -56704,7 +56747,7 @@ ${text}
   }
   async function deleteEntry(node) {
     const isDir = node.type === "dir";
-    if (!confirm(`"${node.name}"${isDir ? " \uD3F4\uB354 \uC804\uCCB4" : ""}\uC744(\uB97C) \uD734\uC9C0\uD1B5\uC73C\uB85C \uBCF4\uB0BC\uAE4C\uC694?`)) return;
+    if (!await window.api.confirmBox(`"${node.name}"${isDir ? " \uD3F4\uB354 \uC804\uCCB4" : ""}\uC744(\uB97C) \uD734\uC9C0\uD1B5\uC73C\uB85C \uBCF4\uB0BC\uAE4C\uC694?`)) return;
     const res = await window.api.trashItem(node.path);
     if (!res || res.error) {
       toast("\uC0AD\uC81C \uC2E4\uD328");
@@ -56751,11 +56794,11 @@ ${text}
       { label: "\u{1F5D1}\uFE0F \uC0AD\uC81C(\uD734\uC9C0\uD1B5)", action: () => deleteEntry(node) }
     ]);
   }
-  function closeOtherTabs(keepId) {
-    for (const t of [...state.tabs]) if (t.id !== keepId) closeTab(t.id);
+  async function closeOtherTabs(keepId) {
+    for (const t of [...state.tabs]) if (t.id !== keepId) await closeTab(t.id);
   }
-  function closeAllTabs() {
-    for (const t of [...state.tabs]) closeTab(t.id);
+  async function closeAllTabs() {
+    for (const t of [...state.tabs]) await closeTab(t.id);
   }
   function renameTab(t) {
     const el = tabbar.querySelector(`.tab[data-tab-id="${t.id}"]`);
@@ -56764,7 +56807,7 @@ ${text}
   }
   async function deleteTabFile(t) {
     if (!t.filePath) return;
-    if (!confirm(`"${t.name}" \uD30C\uC77C\uC744 \uD734\uC9C0\uD1B5\uC73C\uB85C \uBCF4\uB0BC\uAE4C\uC694?`)) return;
+    if (!await window.api.confirmBox(`"${t.name}" \uD30C\uC77C\uC744 \uD734\uC9C0\uD1B5\uC73C\uB85C \uBCF4\uB0BC\uAE4C\uC694?`)) return;
     const res = await window.api.trashItem(t.filePath);
     if (!res || res.error) {
       toast("\uC0AD\uC81C \uC2E4\uD328");

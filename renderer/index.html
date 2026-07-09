@@ -126,12 +126,13 @@
         <button data-fmt="ul" title="목록">• 목록</button>
         <button data-fmt="ol" title="번호 목록">1. 목록</button>
         <button data-fmt="task" title="체크박스">☑ 할일</button>
+        <button data-fmt="bullets" title="개조식 글머리 순환: □ → ○ → - → · → 해제 (여러 줄 선택 가능)">□ 글머리</button>
         <button data-fmt="quote" title="인용">❝ 인용</button>
         <span class="tb-sep"></span>
         <button data-fmt="code" title="인라인 코드">&lt;/&gt;</button>
         <button data-fmt="codeblock" title="코드 블록">{ } 블록</button>
         <button data-fmt="link" title="링크">🔗 링크</button>
-        <button data-fmt="table" title="표">▦ 표</button>
+        <button id="tb-table" title="표 삽입 — 크기를 마우스로 선택">▦ 표</button>
         <button data-fmt="hr" title="구분선">―</button>
         <span class="tb-sep"></span>
         <button id="tb-calendar" title="날짜 삽입 (달력)">📅 날짜</button>
@@ -209,37 +210,14 @@
     </aside>
   </div>
 
-  <!-- 강아지 이스터에그: 클릭 → 달리기 ↔ 멈춤 -->
-  <div id="puppy" class="running" title="강아지 — 클릭하면 달리기/멈춤">
-    <!-- 말티즈 (옆모습, 달리기) -->
-    <svg class="dog dog-maltese" viewBox="0 0 64 50" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="9" cy="24" r="7" fill="#ffffff"/>
-      <circle cx="6" cy="20" r="4" fill="#f1f5f9"/>
-      <rect class="leg leg-a" x="17" y="33" width="6" height="13" rx="3" fill="#e9eef4"/>
-      <rect class="leg leg-b" x="25" y="33" width="6" height="13" rx="3" fill="#dfe6ee"/>
-      <rect class="leg leg-a" x="35" y="33" width="6" height="13" rx="3" fill="#e9eef4"/>
-      <rect class="leg leg-b" x="43" y="33" width="6" height="13" rx="3" fill="#dfe6ee"/>
-      <ellipse cx="30" cy="27" rx="20" ry="13" fill="#ffffff"/>
-      <circle cx="20" cy="20" r="6" fill="#ffffff"/>
-      <circle cx="32" cy="18" r="6" fill="#ffffff"/>
-      <circle cx="49" cy="22" r="13" fill="#ffffff"/>
-      <ellipse cx="43" cy="26" rx="5.5" ry="10" fill="#edf1f6" transform="rotate(12 43 26)"/>
-      <path d="M45 9 l5 4 -5 4z" fill="#ff8fb1"/>
-      <path d="M53 9 l-5 4 5 4z" fill="#ff8fb1"/>
-      <circle cx="49" cy="13" r="2" fill="#ff6f9c"/>
-      <circle cx="51" cy="20" r="2" fill="#3a3a3a"/>
-      <circle cx="61" cy="24" r="2.4" fill="#3a3a3a"/>
-      <path d="M57 28 q3 3 6 1" stroke="#c9ccd1" stroke-width="1.2" fill="none"/>
-    </svg>
-    <!-- 사용자 지정 이미지/움짤 (우클릭으로 설정) -->
-    <img class="dog dog-custom" id="puppy-custom" alt="" />
-  </div>
-
-  <!-- 미니 컨텍스트 메뉴 (강아지 우클릭 등) -->
+  <!-- 미니 컨텍스트 메뉴 (탐색기/탭/달력 우클릭) -->
   <div id="ctxmenu" class="hidden"></div>
 
   <!-- 날짜 삽입 달력 팝업 -->
   <div id="calendar-popup" class="hidden"></div>
+
+  <!-- 표 크기 선택 그리드 -->
+  <div id="table-picker" class="hidden"></div>
 
   <!-- 커맨드 팔레트 -->
   <div id="palette-overlay" class="hidden">
@@ -281,6 +259,14 @@
           <div class="setting-control">
             <label class="switch"><input type="checkbox" id="set-spellcheck" /><span class="slider"></span></label>
             <span class="setting-hint">편집 중 틀린 단어에 빨간 밑줄 (영어 등 OS 사전 기반)</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label>데일리 노트 폴더</label>
+          <div class="setting-control">
+            <button id="set-dailydir" class="setting-btn">폴더 선택…</button>
+            <button id="set-dailydir-clear" class="setting-btn">기본값</button>
+            <span class="setting-hint" id="dailydir-val"></span>
           </div>
         </div>
         <div class="setting-row">
