@@ -1,6 +1,6 @@
 {
   "name": "md-viewer",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "옵시디언 스타일 마크다운 뷰어/에디터 (Windows)",
   "main": "main.js",
   "scripts": {

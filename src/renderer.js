@@ -1183,16 +1183,14 @@ function applyFormat(fmt) {
     case 'link': { const inner = sel || '링크'; insert(`[${inner}](url)`); break; }
     case 'table': insert('\n| 제목1 | 제목2 |\n|------|------|\n| 내용 | 내용 |\n'); break;
     case 'hr': insert('\n---\n'); break;
-    case 'bullets': { // 개조식 글머리 순환: 없음 → □ → ○ → - → · → 해제. 선택한 모든 줄에 일괄 적용
-      const BULL = ['□', '○', '-', '·'];
+    case 'bullet-sq': case 'bullet-dot': { // 글머리 토글: 없으면 추가, 같으면 제거, 다르면 교체. 선택한 모든 줄 일괄
+      const ch = fmt === 'bullet-sq' ? '□' : '·';
       const ls = val.lastIndexOf('\n', s - 1) + 1;
       let le = val.indexOf('\n', en); if (le < 0) le = val.length;
       const lines = val.slice(ls, le).split('\n');
       const parse = (l) => l.match(/^(\s*)(?:([□○·-])\s+)?(.*)$/);
-      const cur = parse(lines[0])[2] || null;
-      const ci = cur ? BULL.indexOf(cur) : -1;
-      const next = ci < 0 ? BULL[0] : (ci === BULL.length - 1 ? null : BULL[ci + 1]);
-      const out = lines.map(l => { const m = parse(l); return m[1] + (next ? next + ' ' : '') + m[3]; });
+      const remove = parse(lines[0])[2] === ch; // 첫 줄 기준: 이미 같은 글머리면 전체 제거
+      const out = lines.map(l => { const m = parse(l); return m[1] + (remove ? '' : ch + ' ') + m[3]; });
       const nb = out.join('\n');
       setValueKeepScroll(editor, val.slice(0, ls) + nb + val.slice(le));
       editor.selectionStart = Math.max(ls, s + (out[0].length - lines[0].length));
