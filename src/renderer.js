@@ -706,6 +706,7 @@ function activateTab(id) {
   statusAutosave.textContent = '';
   if (typeof updateClaudeCtx === 'function') updateClaudeCtx();
   updateUndoButtons();
+  if (t.diskConflict != null) showReloadBanner(t); else hideReloadBanner();
   persist();
 }
 async function closeTab(id) {
@@ -847,7 +848,7 @@ async function saveFile(silent) {
   const t = active(); if (!t) return;
   if (t.filePath) {
     await window.api.writeFile(t.filePath, editor.value);
-    t.savedContent = editor.value; t.dirty = false; renderTabs();
+    t.savedContent = editor.value; t.dirty = false; t.diskConflict = null; hideReloadBanner(); renderTabs();
     statusAutosave.textContent = silent ? '✓ 자동 저장됨' : '✓ 저장됨';
     setTimeout(() => { if (statusAutosave.textContent.includes('저장됨')) statusAutosave.textContent = ''; }, 2000);
   } else await saveFileAs();
@@ -894,7 +895,57 @@ function removeVault(root) { window.api.unwatchFolder(root); state.vaults = stat
 window.api.onVaultChanged((root) => {
   const v = state.vaults.find(x => x.root === root);
   if (v) refreshVault(v);
+  reconcileOpenTabs(root);
 });
+// 외부(Claude Code·다른 편집기 등)에서 디스크 파일이 바뀌면 열린 탭을 최신으로 맞춘다.
+// - 내가 안 건드린 탭(미저장 변경 없음) → 조용히 자동 새로고침
+// - 편집 중이던 탭(미저장 변경 있음) → 덮지 않고 "외부 변경됨" 배너로 사용자 선택
+async function reconcileOpenTabs(root) {
+  const rootLow = (root || '').toLowerCase();
+  for (const t of state.tabs) {
+    if (!t.filePath || !t.filePath.toLowerCase().startsWith(rootLow)) continue;
+    let disk;
+    try { disk = await window.api.readFile(t.filePath); }
+    catch { continue; } // 삭제됐거나 일시적 접근 불가 → 무시(트리 갱신이 처리)
+    if (disk === t.savedContent) continue;            // 외부 변경 없음(또는 내가 방금 저장한 내용과 동일)
+    const cur = (t.id === state.activeId) ? editor.value : t.content;
+    if (disk === cur) { t.savedContent = disk; t.dirty = false; renderTabs(); continue; } // 내용은 이미 일치 → 저장상태만 동기화
+    if (cur === t.savedContent) {
+      reloadTabFromDisk(t, disk, true);              // 미저장 편집 없음 → 자동 새로고침
+    } else {
+      t.diskConflict = disk;                          // 충돌 보관
+      if (t.id === state.activeId) showReloadBanner(t);
+      renderTabs();
+    }
+  }
+}
+function reloadTabFromDisk(t, disk, silent) {
+  t.content = disk; t.savedContent = disk; t.dirty = false; t.diskConflict = null; t.lastCommitted = disk;
+  if (t.id === state.activeId) {
+    const sel = Math.min(editor.selectionStart, disk.length);
+    setValueKeepScroll(editor, disk);
+    editor.selectionStart = editor.selectionEnd = sel;
+    onEditorChanged(); t.lastCommitted = disk; t.dirty = false;
+    hideReloadBanner();
+  }
+  renderTabs();
+  toast(silent ? `외부 변경 반영됨: ${t.name}` : '디스크 내용으로 새로고침했습니다');
+}
+// 수동 새로고침(F5 / Ctrl+R / 우클릭) — 활성 탭을 디스크 내용으로
+async function reloadActiveFromDisk() {
+  const t = active();
+  if (!t || !t.filePath) { toast('디스크에 저장된 파일이 아닙니다'); return; }
+  let disk;
+  try { disk = await window.api.readFile(t.filePath); } catch { toast('파일을 읽을 수 없습니다'); return; }
+  if (disk === editor.value) { t.savedContent = disk; t.dirty = false; renderTabs(); toast('이미 최신 내용입니다'); return; }
+  if (editor.value !== t.savedContent && !(await window.api.confirmBox('내 미저장 편집을 버리고 디스크 내용으로 새로고침할까요?'))) return;
+  reloadTabFromDisk(t, disk, false);
+}
+const reloadBanner = $('#reload-banner');
+function showReloadBanner(t) { $('#reload-banner-msg').textContent = `"${t.name}" 이(가) 외부에서 변경되었습니다.`; reloadBanner.classList.remove('hidden'); }
+function hideReloadBanner() { reloadBanner.classList.add('hidden'); }
+$('#reload-banner-reload').addEventListener('click', () => { const t = active(); if (t && t.diskConflict != null) reloadTabFromDisk(t, t.diskConflict, false); else hideReloadBanner(); });
+$('#reload-banner-keep').addEventListener('click', () => { const t = active(); if (t) t.diskConflict = null; hideReloadBanner(); });
 function renderVaults() {
   vaultsEl.innerHTML = '';
   vaultsEmpty.style.display = state.vaults.length ? 'none' : '';
@@ -2182,6 +2233,7 @@ function showTabCtxMenu(x, y, t) {
   if (state.tabs.length > 1) items.push({ label: '⬌ 오른쪽에 분할', action: () => openSplit2(t.id) });
   items.push({ label: '✏️ 이름 바꾸기', action: () => renameTab(t) });
   if (t.filePath) {
+    items.push({ label: '🔄 디스크에서 새로고침', action: async () => { if (state.activeId !== t.id) activateTab(t.id); await reloadActiveFromDisk(); } });
     items.push({ label: '📋 경로 복사', action: () => { window.api.copyText(t.filePath); toast('경로를 복사했습니다'); } });
     items.push({ label: '📁 탐색기에서 보기', action: () => window.api.showItem(t.filePath) });
     items.push({ label: '🗑️ 파일 삭제(휴지통)', action: () => deleteTabFile(t) });
@@ -2383,10 +2435,12 @@ panes.addEventListener('drop', (e) => {
 
 /* ============================================================ 단축키 */
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'F5') { e.preventDefault(); reloadActiveFromDisk(); return; }
   const ctrl = e.ctrlKey || e.metaKey;
   if (!ctrl) return;
   const k = e.key.toLowerCase();
-  if (k === 'p') { e.preventDefault(); openPalette(); }
+  if (k === 'r') { e.preventDefault(); reloadActiveFromDisk(); }
+  else if (k === 'p') { e.preventDefault(); openPalette(); }
   else if (e.key === '1') { e.preventDefault(); setMode('editor'); }
   else if (e.key === '2') { e.preventDefault(); setMode('split'); }
   else if (e.key === '3') { e.preventDefault(); setMode('preview'); }

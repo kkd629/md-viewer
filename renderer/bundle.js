@@ -54783,6 +54783,8 @@ ${text}</tr>
     statusAutosave.textContent = "";
     if (typeof updateClaudeCtx === "function") updateClaudeCtx();
     updateUndoButtons();
+    if (t.diskConflict != null) showReloadBanner(t);
+    else hideReloadBanner();
     persist();
   }
   async function closeTab(id) {
@@ -55005,6 +55007,8 @@ ${text}</tr>
       await window.api.writeFile(t.filePath, editor.value);
       t.savedContent = editor.value;
       t.dirty = false;
+      t.diskConflict = null;
+      hideReloadBanner();
       renderTabs();
       statusAutosave.textContent = silent ? "\u2713 \uC790\uB3D9 \uC800\uC7A5\uB428" : "\u2713 \uC800\uC7A5\uB428";
       setTimeout(() => {
@@ -55070,6 +55074,93 @@ ${text}</tr>
   window.api.onVaultChanged((root) => {
     const v = state.vaults.find((x) => x.root === root);
     if (v) refreshVault(v);
+    reconcileOpenTabs(root);
+  });
+  async function reconcileOpenTabs(root) {
+    const rootLow = (root || "").toLowerCase();
+    for (const t of state.tabs) {
+      if (!t.filePath || !t.filePath.toLowerCase().startsWith(rootLow)) continue;
+      let disk;
+      try {
+        disk = await window.api.readFile(t.filePath);
+      } catch {
+        continue;
+      }
+      if (disk === t.savedContent) continue;
+      const cur = t.id === state.activeId ? editor.value : t.content;
+      if (disk === cur) {
+        t.savedContent = disk;
+        t.dirty = false;
+        renderTabs();
+        continue;
+      }
+      if (cur === t.savedContent) {
+        reloadTabFromDisk(t, disk, true);
+      } else {
+        t.diskConflict = disk;
+        if (t.id === state.activeId) showReloadBanner(t);
+        renderTabs();
+      }
+    }
+  }
+  function reloadTabFromDisk(t, disk, silent) {
+    t.content = disk;
+    t.savedContent = disk;
+    t.dirty = false;
+    t.diskConflict = null;
+    t.lastCommitted = disk;
+    if (t.id === state.activeId) {
+      const sel = Math.min(editor.selectionStart, disk.length);
+      setValueKeepScroll(editor, disk);
+      editor.selectionStart = editor.selectionEnd = sel;
+      onEditorChanged();
+      t.lastCommitted = disk;
+      t.dirty = false;
+      hideReloadBanner();
+    }
+    renderTabs();
+    toast(silent ? `\uC678\uBD80 \uBCC0\uACBD \uBC18\uC601\uB428: ${t.name}` : "\uB514\uC2A4\uD06C \uB0B4\uC6A9\uC73C\uB85C \uC0C8\uB85C\uACE0\uCE68\uD588\uC2B5\uB2C8\uB2E4");
+  }
+  async function reloadActiveFromDisk() {
+    const t = active();
+    if (!t || !t.filePath) {
+      toast("\uB514\uC2A4\uD06C\uC5D0 \uC800\uC7A5\uB41C \uD30C\uC77C\uC774 \uC544\uB2D9\uB2C8\uB2E4");
+      return;
+    }
+    let disk;
+    try {
+      disk = await window.api.readFile(t.filePath);
+    } catch {
+      toast("\uD30C\uC77C\uC744 \uC77D\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
+      return;
+    }
+    if (disk === editor.value) {
+      t.savedContent = disk;
+      t.dirty = false;
+      renderTabs();
+      toast("\uC774\uBBF8 \uCD5C\uC2E0 \uB0B4\uC6A9\uC785\uB2C8\uB2E4");
+      return;
+    }
+    if (editor.value !== t.savedContent && !await window.api.confirmBox("\uB0B4 \uBBF8\uC800\uC7A5 \uD3B8\uC9D1\uC744 \uBC84\uB9AC\uACE0 \uB514\uC2A4\uD06C \uB0B4\uC6A9\uC73C\uB85C \uC0C8\uB85C\uACE0\uCE68\uD560\uAE4C\uC694?")) return;
+    reloadTabFromDisk(t, disk, false);
+  }
+  var reloadBanner = $("#reload-banner");
+  function showReloadBanner(t) {
+    $("#reload-banner-msg").textContent = `"${t.name}" \uC774(\uAC00) \uC678\uBD80\uC5D0\uC11C \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4.`;
+    reloadBanner.classList.remove("hidden");
+  }
+  function hideReloadBanner() {
+    reloadBanner.classList.add("hidden");
+  }
+  $("#reload-banner-reload").addEventListener("click", () => {
+    const t = active();
+    if (t && t.diskConflict != null) reloadTabFromDisk(t, t.diskConflict, false);
+    else hideReloadBanner();
+  });
+  $("#reload-banner-keep").addEventListener("click", () => {
+    const t = active();
+    if (t) t.diskConflict = null;
+    hideReloadBanner();
   });
   function renderVaults() {
     vaultsEl.innerHTML = "";
@@ -56826,6 +56917,10 @@ ${text}
     if (state.tabs.length > 1) items.push({ label: "\u2B0C \uC624\uB978\uCABD\uC5D0 \uBD84\uD560", action: () => openSplit2(t.id) });
     items.push({ label: "\u270F\uFE0F \uC774\uB984 \uBC14\uAFB8\uAE30", action: () => renameTab(t) });
     if (t.filePath) {
+      items.push({ label: "\u{1F504} \uB514\uC2A4\uD06C\uC5D0\uC11C \uC0C8\uB85C\uACE0\uCE68", action: async () => {
+        if (state.activeId !== t.id) activateTab(t.id);
+        await reloadActiveFromDisk();
+      } });
       items.push({ label: "\u{1F4CB} \uACBD\uB85C \uBCF5\uC0AC", action: () => {
         window.api.copyText(t.filePath);
         toast("\uACBD\uB85C\uB97C \uBCF5\uC0AC\uD588\uC2B5\uB2C8\uB2E4");
@@ -57096,10 +57191,18 @@ ${text}
     }
   });
   window.addEventListener("keydown", (e) => {
+    if (e.key === "F5") {
+      e.preventDefault();
+      reloadActiveFromDisk();
+      return;
+    }
     const ctrl = e.ctrlKey || e.metaKey;
     if (!ctrl) return;
     const k = e.key.toLowerCase();
-    if (k === "p") {
+    if (k === "r") {
+      e.preventDefault();
+      reloadActiveFromDisk();
+    } else if (k === "p") {
       e.preventDefault();
       openPalette();
     } else if (e.key === "1") {

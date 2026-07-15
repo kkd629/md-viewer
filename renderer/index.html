@@ -139,6 +139,14 @@
         <button id="tb-calendar" title="날짜 삽입 (달력)">📅 날짜</button>
       </div>
 
+      <!-- 외부 변경 알림 배너 (미저장 편집 충돌 시) -->
+      <div id="reload-banner" class="hidden">
+        <span class="rb-icon">⚠</span>
+        <span id="reload-banner-msg">이 파일이 외부에서 변경되었습니다.</span>
+        <button id="reload-banner-reload">디스크 내용으로 새로고침</button>
+        <button id="reload-banner-keep">내 편집 유지</button>
+      </div>
+
       <!-- 패널 -->
       <section id="panes">
         <div id="editor-pane" class="pane">
