@@ -119,6 +119,15 @@ function resolveRelativeImages(html) {
   return html.replace(/<img([^>]*?)src="(?!https?:|file:|data:)([^"]+)"/g,
     (full, pre, src) => `<img${pre}src="${base}${src}"`);
 }
+// 브라우저 innerHTML 파서에서 <title>·<style>·<textarea>·<plaintext> 등 "raw text" 태그는
+// 닫는 태그가 나올 때까지 뒤 내용을 통째로 "텍스트"로 삼킨다. 마크다운 본문에 이런 태그가
+// 글자 그대로 들어 있으면(예: "…<title>도 맞춘다") 닫는 태그가 없어 그 뒤 문서 전체가 미리보기에서
+// 사라진다(잘림). marked 가 원시 HTML 로 통과시킨 이 태그들을 글자 그대로 보이게 이스케이프한다.
+// (코드블록·인라인코드 안의 < 는 이미 &lt; 로 이스케이프돼 있어 영향 없음)
+function neutralizeRawTextTags(html) {
+  return html.replace(/<(\/?)(?:title|textarea|style|script|xmp|plaintext|noscript|noembed|noframes|iframe)\b/gi,
+    (m) => '&lt;' + m.slice(1));
+}
 function renderMarkdown(text) {
   let tokens;
   try { tokens = marked.lexer(text); } catch { preview.innerHTML = '<p>렌더링 오류</p>'; return; }
@@ -129,7 +138,7 @@ function renderMarkdown(text) {
     if (piece.trim()) html += injectLineAttr(piece, line);
     line += (token.raw.match(/\n/g) || []).length;
   }
-  preview.innerHTML = resolveRelativeImages(html);
+  preview.innerHTML = neutralizeRawTextTags(resolveRelativeImages(html));
   // 체크리스트 항목 구분 (완료 = 초록) + 미리보기에서 직접 체크 가능하게 활성화
   preview.querySelectorAll('li input[type="checkbox"]').forEach((cb) => {
     cb.disabled = false; // marked 는 기본 disabled → 클릭 가능하게
@@ -169,10 +178,22 @@ preview.addEventListener('change', (e) => {
   if (idx >= 0) toggleTaskInSource(idx);
 });
 function buildLineMap() {
+  const els = preview.querySelectorAll('[data-line]');
+  if (!els.length) return; // 렌더 전/전환 중 빈 측정으로 기존 맵을 지워 동기화가 멈추지 않도록
   const map = [];
-  preview.querySelectorAll('[data-line]').forEach(el => map.push({ line: +el.dataset.line, top: el.offsetTop }));
+  els.forEach(el => map.push({ line: +el.dataset.line, top: el.offsetTop }));
   state.lineMap = map;
 }
+// 미리보기가 렌더 직후엔 폴백 폰트로 측정되고, SamsungOne 웹폰트가 swap 되거나 이미지가 늦게
+// 로드되면 블록 높이가 바뀐다. 이때 캐시된 offsetTop 이 낡아 스크롤 동기화가 깊이 내려갈수록
+// 밀린다. 미리보기 크기 변화를 감지해 lineMap 을 다시 만든다. (스크롤 위치는 강제로 건드리지 않음)
+let lineMapRaf = null;
+function scheduleLineMap() {
+  if (lineMapRaf) return;
+  lineMapRaf = requestAnimationFrame(() => { lineMapRaf = null; if (state.mode === 'split') buildLineMap(); });
+}
+if (window.ResizeObserver) new ResizeObserver(() => scheduleLineMap()).observe(preview);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => scheduleLineMap());
 
 // 미리보기 갱신 — HTML 문서면 실제 페이지를 iframe 으로 렌더, 아니면 마크다운
 let htmlRenderTimer = null;

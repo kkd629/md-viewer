@@ -54094,6 +54094,12 @@ ${text}</tr>
       (full, pre, src) => `<img${pre}src="${base}${src}"`
     );
   }
+  function neutralizeRawTextTags(html2) {
+    return html2.replace(
+      /<(\/?)(?:title|textarea|style|script|xmp|plaintext|noscript|noembed|noframes|iframe)\b/gi,
+      (m) => "&lt;" + m.slice(1)
+    );
+  }
   function renderMarkdown(text) {
     let tokens;
     try {
@@ -54113,7 +54119,7 @@ ${text}</tr>
       if (piece.trim()) html2 += injectLineAttr(piece, line);
       line += (token.raw.match(/\n/g) || []).length;
     }
-    preview.innerHTML = resolveRelativeImages(html2);
+    preview.innerHTML = neutralizeRawTextTags(resolveRelativeImages(html2));
     preview.querySelectorAll('li input[type="checkbox"]').forEach((cb) => {
       cb.disabled = false;
       const li = cb.closest("li");
@@ -54153,10 +54159,22 @@ ${text}</tr>
     if (idx >= 0) toggleTaskInSource(idx);
   });
   function buildLineMap() {
+    const els = preview.querySelectorAll("[data-line]");
+    if (!els.length) return;
     const map = [];
-    preview.querySelectorAll("[data-line]").forEach((el) => map.push({ line: +el.dataset.line, top: el.offsetTop }));
+    els.forEach((el) => map.push({ line: +el.dataset.line, top: el.offsetTop }));
     state.lineMap = map;
   }
+  var lineMapRaf = null;
+  function scheduleLineMap() {
+    if (lineMapRaf) return;
+    lineMapRaf = requestAnimationFrame(() => {
+      lineMapRaf = null;
+      if (state.mode === "split") buildLineMap();
+    });
+  }
+  if (window.ResizeObserver) new ResizeObserver(() => scheduleLineMap()).observe(preview);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => scheduleLineMap());
   function renderPreview() {
     if (isHtmlDoc(active())) {
       preview.classList.add("hidden");
