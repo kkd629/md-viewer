@@ -54333,7 +54333,9 @@ ${text}</tr>
   function syncEditorToPreview() {
     if (syncing || state.mode !== "split" || !state.lineMap.length) return;
     syncing = true;
-    previewPane.scrollTop = previewTopForLine(editor.scrollTop / lineHeightPx());
+    const edMax = editor.scrollHeight - editor.clientHeight;
+    if (edMax > 2 && editor.scrollTop >= edMax - 2) previewPane.scrollTop = previewPane.scrollHeight;
+    else previewPane.scrollTop = previewTopForLine(editor.scrollTop / lineHeightPx());
     releaseSync();
   }
   function syncPreviewToEditor() {
@@ -54707,13 +54709,13 @@ ${text}</tr>
     statusMode.textContent = modeLabels[mode];
     document.querySelectorAll(".mode-switch button").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
     if (mode !== "editor") renderPreview();
-    if (mode === "split") requestAnimationFrame(() => {
-      buildLineMap();
-      syncEditorToPreview();
-    });
-    if (mode !== "preview") requestAnimationFrame(() => {
-      applyHighlight();
-      editor.focus();
+    if (mode !== "preview") applyHighlight();
+    requestAnimationFrame(() => {
+      if (mode !== "preview") editor.focus();
+      if (mode === "split") {
+        buildLineMap();
+        syncEditorToPreview();
+      }
     });
     persist();
   }

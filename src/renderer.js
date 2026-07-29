@@ -328,7 +328,11 @@ function previewTopForLine(line) {
 function syncEditorToPreview() {
   if (syncing || state.mode !== 'split' || !state.lineMap.length) return;
   syncing = true;
-  previewPane.scrollTop = previewTopForLine(editor.scrollTop / lineHeightPx());
+  const edMax = editor.scrollHeight - editor.clientHeight;
+  // 편집기가 맨 끝이면 미리보기도 맨 끝으로(마지막 줄이 미리보기 밖으로 잘리지 않게).
+  // 렌더된 미리보기가 편집기보다 세로로 길어, 줄-상단 매핑만으로는 끝줄에 도달 못 하는 문제 보완.
+  if (edMax > 2 && editor.scrollTop >= edMax - 2) previewPane.scrollTop = previewPane.scrollHeight;
+  else previewPane.scrollTop = previewTopForLine(editor.scrollTop / lineHeightPx());
   releaseSync();
 }
 function syncPreviewToEditor() {
@@ -652,8 +656,13 @@ function setMode(mode) {
   statusMode.textContent = modeLabels[mode];
   document.querySelectorAll('.mode-switch button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   if (mode !== 'editor') renderPreview();
-  if (mode === 'split') requestAnimationFrame(() => { buildLineMap(); syncEditorToPreview(); });
-  if (mode !== 'preview') requestAnimationFrame(() => { applyHighlight(); editor.focus(); });
+  if (mode !== 'preview') applyHighlight();
+  // 한 프레임 안에서 focus 를 먼저(편집기를 커서 위치로 스크롤) → 그다음 미리보기 동기화.
+  // 순서가 반대면 focus 스크롤 후 미리보기가 재동기화되지 않아 편집기는 끝, 미리보기는 맨 위로 어긋난다.
+  requestAnimationFrame(() => {
+    if (mode !== 'preview') editor.focus();
+    if (mode === 'split') { buildLineMap(); syncEditorToPreview(); }
+  });
   persist();
 }
 let lastNonSplit = 'preview';
