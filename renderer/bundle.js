@@ -53991,6 +53991,12 @@ ${text}</tr>
         const { html: html2, lang: l } = highlightCode(text, lang);
         return `<pre><code class="hljs${l ? " language-" + l : ""}">${html2}</code></pre>
 `;
+      },
+      // 소스에 직접 쓴 원시 HTML(<a>, <title>, <b>, <div> 등)은 렌더하지 않고 글자 그대로 표시한다.
+      // 닫히지 않은 태그가 문서 뒷부분을 통째로 삼키거나(<title>) 링크·굵게로 물들이는(<a>,<b>) 것을
+      // 막는다. [텍스트](url) 로 만든 진짜 링크는 renderer.link 를 거치므로 영향 없다.
+      html(token) {
+        return escHtml(typeof token === "string" ? token : token.text);
       }
     }
   });
@@ -54094,12 +54100,6 @@ ${text}</tr>
       (full, pre, src) => `<img${pre}src="${base}${src}"`
     );
   }
-  function neutralizeRawTextTags(html2) {
-    return html2.replace(
-      /<(\/?)(?:title|textarea|style|script|xmp|plaintext|noscript|noembed|noframes|iframe)\b/gi,
-      (m) => "&lt;" + m.slice(1)
-    );
-  }
   function renderMarkdown(text) {
     let tokens;
     try {
@@ -54119,7 +54119,7 @@ ${text}</tr>
       if (piece.trim()) html2 += injectLineAttr(piece, line);
       line += (token.raw.match(/\n/g) || []).length;
     }
-    preview.innerHTML = neutralizeRawTextTags(resolveRelativeImages(html2));
+    preview.innerHTML = resolveRelativeImages(html2);
     preview.querySelectorAll('li input[type="checkbox"]').forEach((cb) => {
       cb.disabled = false;
       const li = cb.closest("li");

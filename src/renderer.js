@@ -26,7 +26,11 @@ marked.use(gfmHeadingId(), {
       const lang = typeof token === 'string' ? arguments[1] : token.lang;
       const { html, lang: l } = highlightCode(text, lang);
       return `<pre><code class="hljs${l ? ' language-' + l : ''}">${html}</code></pre>\n`;
-    }
+    },
+    // 소스에 직접 쓴 원시 HTML(<a>, <title>, <b>, <div> 등)은 렌더하지 않고 글자 그대로 표시한다.
+    // 닫히지 않은 태그가 문서 뒷부분을 통째로 삼키거나(<title>) 링크·굵게로 물들이는(<a>,<b>) 것을
+    // 막는다. [텍스트](url) 로 만든 진짜 링크는 renderer.link 를 거치므로 영향 없다.
+    html(token) { return escHtml(typeof token === 'string' ? token : token.text); }
   }
 });
 const wikiExtension = {
@@ -119,15 +123,6 @@ function resolveRelativeImages(html) {
   return html.replace(/<img([^>]*?)src="(?!https?:|file:|data:)([^"]+)"/g,
     (full, pre, src) => `<img${pre}src="${base}${src}"`);
 }
-// 브라우저 innerHTML 파서에서 <title>·<style>·<textarea>·<plaintext> 등 "raw text" 태그는
-// 닫는 태그가 나올 때까지 뒤 내용을 통째로 "텍스트"로 삼킨다. 마크다운 본문에 이런 태그가
-// 글자 그대로 들어 있으면(예: "…<title>도 맞춘다") 닫는 태그가 없어 그 뒤 문서 전체가 미리보기에서
-// 사라진다(잘림). marked 가 원시 HTML 로 통과시킨 이 태그들을 글자 그대로 보이게 이스케이프한다.
-// (코드블록·인라인코드 안의 < 는 이미 &lt; 로 이스케이프돼 있어 영향 없음)
-function neutralizeRawTextTags(html) {
-  return html.replace(/<(\/?)(?:title|textarea|style|script|xmp|plaintext|noscript|noembed|noframes|iframe)\b/gi,
-    (m) => '&lt;' + m.slice(1));
-}
 function renderMarkdown(text) {
   let tokens;
   try { tokens = marked.lexer(text); } catch { preview.innerHTML = '<p>렌더링 오류</p>'; return; }
@@ -138,7 +133,7 @@ function renderMarkdown(text) {
     if (piece.trim()) html += injectLineAttr(piece, line);
     line += (token.raw.match(/\n/g) || []).length;
   }
-  preview.innerHTML = neutralizeRawTextTags(resolveRelativeImages(html));
+  preview.innerHTML = resolveRelativeImages(html);
   // 체크리스트 항목 구분 (완료 = 초록) + 미리보기에서 직접 체크 가능하게 활성화
   preview.querySelectorAll('li input[type="checkbox"]').forEach((cb) => {
     cb.disabled = false; // marked 는 기본 disabled → 클릭 가능하게
