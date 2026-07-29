@@ -54015,7 +54015,25 @@ ${text}</tr>
       return `<a class="wikilink" data-wiki="${t}">${token.alias}</a>`;
     }
   };
-  marked.use({ extensions: [wikiExtension] });
+  var sectionBoxExtension = {
+    name: "sectionBox",
+    level: "block",
+    start(src) {
+      const m = src.match(/^={3,}[ \t]*$/m);
+      return m ? m.index : void 0;
+    },
+    tokenizer(src) {
+      const m = /^={3,}[ \t]*\n([^\n]+)\n={3,}[ \t]*(?:\n|$)/.exec(src);
+      if (m && m[1].trim() && !/^={3,}[ \t]*$/.test(m[1])) {
+        return { type: "sectionBox", raw: m[0], text: m[1].trim() };
+      }
+    },
+    renderer(token) {
+      return `<h2 class="section-box">${escHtml(token.text)}</h2>
+`;
+    }
+  };
+  marked.use({ extensions: [wikiExtension, sectionBoxExtension] });
   var $ = (s) => document.querySelector(s);
   var editor = $("#editor");
   var hl = $("#editor-highlight");
@@ -55349,22 +55367,30 @@ ${text}</tr>
     outlineList.innerHTML = "";
     outlineEntries = [];
     let fence = false;
+    const isEq = (s) => /^={3,}\s*$/.test(s || "");
     lines.forEach((ln, i) => {
       if (/^\s*```/.test(ln)) {
         fence = !fence;
         return;
       }
       if (fence) return;
+      let level = 0, title = "";
       const m = /^(#{1,6})\s+(.*)$/.exec(ln);
       if (m) {
-        const item = document.createElement("div");
-        item.className = "outline-item lv" + m[1].length;
-        item.textContent = m[2].replace(/[*_`~]/g, "");
-        item.title = m[2];
-        item.addEventListener("click", () => scrollToLine(i));
-        outlineList.appendChild(item);
-        outlineEntries.push({ line: i, el: item });
+        level = m[1].length;
+        title = m[2];
+      } else if (ln.trim() && !isEq(ln) && isEq(lines[i - 1]) && isEq(lines[i + 1])) {
+        level = 2;
+        title = ln.trim();
       }
+      if (!level) return;
+      const item = document.createElement("div");
+      item.className = "outline-item lv" + level;
+      item.textContent = title.replace(/[*_`~]/g, "");
+      item.title = title;
+      item.addEventListener("click", () => scrollToLine(i));
+      outlineList.appendChild(item);
+      outlineEntries.push({ line: i, el: item });
     });
     if (!outlineEntries.length) outlineList.innerHTML = '<div class="tree-empty">\uC81C\uBAA9 \uC5C6\uC74C</div>';
   }

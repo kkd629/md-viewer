@@ -520,6 +520,11 @@ body.no-syntax #editor-highlight, body.no-syntax #editor2-highlight { display: n
 .markdown-body th { background: var(--bg-alt); }
 .markdown-body tr:nth-child(2n) { background: var(--bg-alt); }
 .markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 1.6em 0; }
+/* ==== 박스 제목(개조식 문서의 섹션 구분) — 위아래 구분선으로 감싼 섹션 헤더 */
+.markdown-body h2.section-box {
+  border-top: 2px solid var(--accent); border-bottom: 2px solid var(--accent);
+  padding: .35em 0; margin: 1.8em 0 .9em; font-size: 1.4em;
+}
 .markdown-body img { max-width: 100%; border-radius: 6px; }
 
 /* highlight.js (코드블록) */

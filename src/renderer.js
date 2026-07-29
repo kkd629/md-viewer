@@ -45,7 +45,25 @@ const wikiExtension = {
     return `<a class="wikilink" data-wiki="${t}">${token.alias}</a>`;
   }
 };
-marked.use({ extensions: [wikiExtension] });
+// 개조식 문서에서 흔한 "==== 박스 제목" 패턴:
+//   ========================
+//   D) 콘텐츠 범위·사실 정확성
+//   ========================
+// 마크다운 표준으로는 위 === 줄과 제목이 한 문단이 되고 아래 === 가 밑줄식(Setext) H1 이 되어
+// "=" 기호까지 통째로 거대한 제목으로 변해버린다. 이 앱에서는 이 박스 패턴을 알아보고
+// 가운데 줄만 깔끔한 섹션 제목(구분선 스타일)으로 렌더한다. (문서 원본은 그대로)
+const sectionBoxExtension = {
+  name: 'sectionBox', level: 'block',
+  start(src) { const m = src.match(/^={3,}[ \t]*$/m); return m ? m.index : undefined; },
+  tokenizer(src) {
+    const m = /^={3,}[ \t]*\n([^\n]+)\n={3,}[ \t]*(?:\n|$)/.exec(src);
+    if (m && m[1].trim() && !/^={3,}[ \t]*$/.test(m[1])) {
+      return { type: 'sectionBox', raw: m[0], text: m[1].trim() };
+    }
+  },
+  renderer(token) { return `<h2 class="section-box">${escHtml(token.text)}</h2>\n`; }
+};
+marked.use({ extensions: [wikiExtension, sectionBoxExtension] });
 
 /* ============================================================ DOM */
 const $ = (s) => document.querySelector(s);
@@ -1088,19 +1106,23 @@ function buildOutline() {
   outlineList.innerHTML = '';
   outlineEntries = [];
   let fence = false;
+  const isEq = (s) => /^={3,}\s*$/.test(s || '');
   lines.forEach((ln, i) => {
     if (/^\s*```/.test(ln)) { fence = !fence; return; }
     if (fence) return;
+    let level = 0, title = '';
     const m = /^(#{1,6})\s+(.*)$/.exec(ln);
-    if (m) {
-      const item = document.createElement('div');
-      item.className = 'outline-item lv' + m[1].length;
-      item.textContent = m[2].replace(/[*_`~]/g, '');
-      item.title = m[2];
-      item.addEventListener('click', () => scrollToLine(i));
-      outlineList.appendChild(item);
-      outlineEntries.push({ line: i, el: item });
-    }
+    if (m) { level = m[1].length; title = m[2]; }
+    // ==== 박스 제목(위·아래 줄이 ==== 이고 가운데가 제목) → 섹션 제목으로 취급
+    else if (ln.trim() && !isEq(ln) && isEq(lines[i - 1]) && isEq(lines[i + 1])) { level = 2; title = ln.trim(); }
+    if (!level) return;
+    const item = document.createElement('div');
+    item.className = 'outline-item lv' + level;
+    item.textContent = title.replace(/[*_`~]/g, '');
+    item.title = title;
+    item.addEventListener('click', () => scrollToLine(i));
+    outlineList.appendChild(item);
+    outlineEntries.push({ line: i, el: item });
   });
   if (!outlineEntries.length) outlineList.innerHTML = '<div class="tree-empty">제목 없음</div>';
 }
